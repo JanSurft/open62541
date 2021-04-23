@@ -729,6 +729,10 @@ typedef struct {
     UA_Boolean enableBlockingSocket; // To enable or disable blocking socket option
     UA_UInt32 timeout; // Timeout for receive to wait for the packets
     UA_PubSubRTLevel rtLevel;
+#ifdef UA_ENABLE_PUBSUB_ENCRYPTION
+    UA_MessageSecurityMode securityMode;
+    UA_PubSubSecurityPolicy *securityPolicy;
+#endif
 } UA_ReaderGroupConfig;
 
 void UA_EXPORT

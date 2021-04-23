@@ -35,6 +35,8 @@
 #include <open62541/server_config_default.h>
 #include <open62541/types_generated.h>
 
+#include <open62541/plugin/securitypolicy_default.h>
+
 #include "ua_pubsub.h"
 
 #if defined (UA_ENABLE_PUBSUB_ETH_UADP)
@@ -44,6 +46,15 @@
 #include <stdio.h>
 #include <signal.h>
 #include <stdlib.h>
+
+#define UA_AES128CTR_SIGNING_KEY_LENGTH 16
+#define UA_AES128CTR_KEY_LENGTH 16
+#define UA_AES128CTR_KEYNONCE_LENGTH 4
+
+UA_Byte signingKey[UA_AES128CTR_SIGNING_KEY_LENGTH] = {0};
+UA_Byte encryptingKey[UA_AES128CTR_KEY_LENGTH] = {0};
+UA_Byte keyNonce[UA_AES128CTR_KEYNONCE_LENGTH] = {0};
+
 
 UA_NodeId connectionIdentifier;
 UA_NodeId readerGroupIdentifier;
@@ -97,6 +108,12 @@ addReaderGroup(UA_Server *server) {
     UA_ReaderGroupConfig readerGroupConfig;
     memset (&readerGroupConfig, 0, sizeof(UA_ReaderGroupConfig));
     readerGroupConfig.name = UA_STRING("ReaderGroup1");
+
+    /* Encryption settings */
+    UA_ServerConfig *config = UA_Server_getConfig(server);
+    readerGroupConfig.securityMode = UA_MESSAGESECURITYMODE_SIGNANDENCRYPT;
+    readerGroupConfig.securityPolicy = &config->pubSubConfig.securityPolicies[0];
+
     retval |= UA_Server_addReaderGroup(server, connectionIdentifier, &readerGroupConfig,
                                        &readerGroupIdentifier);
     UA_Server_setReaderGroupOperational(server, readerGroupIdentifier);
@@ -288,7 +305,12 @@ run(UA_String *transportProfile, UA_NetworkAddressUrlDataType *networkAddressUrl
     UA_ServerConfig *config = UA_Server_getConfig(server);
     UA_ServerConfig_setMinimal(config, 4801, NULL);
 
-    config->logger = UA_Log_Stdout_withLevel( UA_LOGLEVEL_DEBUG );
+    /* Instantiate the PubSub SecurityPolicy */
+    config->pubSubConfig.securityPolicies = (UA_PubSubSecurityPolicy*)
+        UA_malloc(sizeof(UA_PubSubSecurityPolicy));
+    config->pubSubConfig.securityPoliciesSize = 1;
+    UA_PubSubSecurityPolicy_Aes128Ctr(config->pubSubConfig.securityPolicies,
+                                      &config->logger);
 
     /* Add the PubSub network layer implementation to the server config.
      * The TransportLayer is acting as factory to create new connections
@@ -331,30 +353,34 @@ usage(char *progname) {
 }
 
 int main(int argc, char **argv) {
-    UA_String transportProfile = UA_STRING("http://opcfoundation.org/UA-Profile/Transport/pubsub-udp-uadp");
-    UA_NetworkAddressUrlDataType networkAddressUrl = {UA_STRING_NULL , UA_STRING("opc.udp://224.0.0.22:4840/")};
-    if(argc > 1) {
-        if(strcmp(argv[1], "-h") == 0) {
+    UA_String transportProfile =
+        UA_STRING("http://opcfoundation.org/UA-Profile/Transport/pubsub-udp-uadp");
+    UA_NetworkAddressUrlDataType networkAddressUrl =
+        {UA_STRING_NULL , UA_STRING("opc.udp://224.0.0.22:4840/")};
+
+    if (argc > 1) {
+        if (strcmp(argv[1], "-h") == 0) {
             usage(argv[0]);
             return EXIT_SUCCESS;
-        } else if(strncmp(argv[1], "opc.udp://", 10) == 0) {
+        
+        }
+
+        if (strncmp(argv[1], "opc.udp://", 10) == 0) {
             networkAddressUrl.url = UA_STRING(argv[1]);
-        } else if(strncmp(argv[1], "opc.eth://", 10) == 0) {
+        } else if (strncmp(argv[1], "opc.eth://", 10) == 0) {
             transportProfile =
                 UA_STRING("http://opcfoundation.org/UA-Profile/Transport/pubsub-eth-uadp");
-            if(argc < 3) {
+            if (argc < 3) {
                 printf("Error: UADP/ETH needs an interface name\n");
                 return EXIT_FAILURE;
             }
-
             networkAddressUrl.networkInterface = UA_STRING(argv[2]);
             networkAddressUrl.url = UA_STRING(argv[1]);
         } else {
-            printf ("Error: unknown URI\n");
+            printf("Error: unknown URI\n");
             return EXIT_FAILURE;
         }
     }
 
     return run(&transportProfile, &networkAddressUrl);
 }
-
