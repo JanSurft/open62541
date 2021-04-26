@@ -220,6 +220,22 @@ typedef struct {
     UA_NetworkMessage *nm; /* The precomputed NetworkMessage for subscriber */
 } UA_NetworkMessageOffsetBuffer;
 
+typedef struct {
+    UA_Byte *start;
+    UA_Byte *end;
+
+} UA_BufferPosition;
+
+typedef struct {
+    UA_BufferPosition networkMessageHeader;
+    UA_BufferPosition groupHeader;
+    UA_BufferPosition payloadHeader;
+    UA_BufferPosition extendedNetworkMessageHeader;
+    UA_BufferPosition securityHeader;
+    UA_BufferPosition payload;
+    UA_BufferPosition securityFooter;
+} UA_NetworkMessagePositions;
+
 /**
  * DataSetMessage
  * ^^^^^^^^^^^^^^ */
@@ -284,26 +300,25 @@ UA_StatusCode
 UA_NetworkMessage_encodeFooters(const UA_NetworkMessage* src,
                                UA_Byte **bufPos, const UA_Byte *bufEnd);
 
-UA_StatusCode
-UA_NetworkMessageHeader_encodeBinary(const UA_NetworkMessage* src,
-                               UA_Byte **bufPos, const UA_Byte *bufEnd);
-
-UA_StatusCode
-UA_GroupHeader_encodeBinary(const UA_NetworkMessage* src,
-                               UA_Byte **bufPos, const UA_Byte *bufEnd);
-
-UA_StatusCode
-UA_SecurityHeader_encodeBinary(const UA_NetworkMessage* src,
-                               UA_Byte **bufPos, const UA_Byte *bufEnd);
-
-UA_StatusCode
-UA_PayloadHeader_encodeBinary(const UA_NetworkMessage* src,
-                               UA_Byte **bufPos, const UA_Byte *bufEnd);
-
-UA_StatusCode
-UA_ExtendedNetworkMessageHeader_encodeBinary(const UA_NetworkMessage* src,
-                               UA_Byte **bufPos, const UA_Byte *bufEnd);
-
+// UA_StatusCode
+// UA_NetworkMessageHeader_encodeBinary(const UA_NetworkMessage* src,
+//                                UA_Byte **bufPos, const UA_Byte *bufEnd);
+//
+// UA_StatusCode
+// UA_GroupHeader_encodeBinary(const UA_NetworkMessage* src,
+//                                UA_Byte **bufPos, const UA_Byte *bufEnd);
+//
+// UA_StatusCode
+// UA_SecurityHeader_encodeBinary(const UA_NetworkMessage* src,
+//                                UA_Byte **bufPos, const UA_Byte *bufEnd);
+//
+// UA_StatusCode
+// UA_PayloadHeader_encodeBinary(const UA_NetworkMessage* src,
+//                                UA_Byte **bufPos, const UA_Byte *bufEnd);
+//
+// UA_StatusCode
+// UA_ExtendedNetworkMessageHeader_encodeBinary(const UA_NetworkMessage* src,
+//                                UA_Byte **bufPos, const UA_Byte *bufEnd);
 
 
 
@@ -311,16 +326,28 @@ UA_ExtendedNetworkMessageHeader_encodeBinary(const UA_NetworkMessage* src,
  * NetworkMessage Decoding 
  * ^^^^^^^^^^^^^^^^^^^^^^^ */
 
+UA_StatusCode
+UA_NetworkMessage_decodeHeaders(const UA_ByteString *src, size_t *offset, UA_NetworkMessage *dst);
+
 
 UA_StatusCode
 UA_NetworkMessage_decodeBinary(const UA_ByteString *src, size_t *offset,
                                UA_NetworkMessage* dst);
+
+
+UA_StatusCode
+UA_NetworkMessageHeader_decodeBinary(const UA_ByteString *src, size_t *offset, UA_NetworkMessage *dst);
 
 size_t
 UA_NetworkMessage_calcSizeBinary(UA_NetworkMessage *p,
                                  UA_NetworkMessageOffsetBuffer *offsetBuffer);
 
 #ifdef UA_ENABLE_PUBSUB_ENCRYPTION
+
+UA_StatusCode
+UA_NetworkMessage_encrypt(UA_Byte *start, UA_Byte *end, void* channelContext,
+                          UA_StatusCode (*encrypt)(void*, UA_ByteString *));
+
 UA_StatusCode
 UA_NetworkMessage_signEncrypt(UA_NetworkMessage *nm, UA_MessageSecurityMode securityMode,
                               UA_PubSubSecurityPolicy *policy, void *policyContext,

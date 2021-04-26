@@ -1006,6 +1006,16 @@ void UA_ReaderGroup_subscribeCallback(UA_Server *server, UA_ReaderGroup *readerG
                 size_t paddingBytes = 0;
                 UA_NetworkMessage currentNetworkMessage;
                 memset(&currentNetworkMessage, 0, sizeof(UA_NetworkMessage));
+
+                UA_NetworkMessage_decodeHeaders(&buffer, &currentPosition, &currentNetworkMessage);
+
+#ifdef UA_ENABLE_PUBSUB_ENCRYPTION
+
+
+                // UA_NetworkMessage_decrypt(&buffer, &currentPosition, &currentNetworkMessage);
+
+#endif
+
                 UA_NetworkMessage_decodeBinary(&buffer, &currentPosition, &currentNetworkMessage);
                 /* TODO: We already know the ReaderGroup at this point. Now we loose that information.
                  * There is only one place where UA_PubSubConnection_processNetworkMessage is used. */

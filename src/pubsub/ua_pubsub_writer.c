@@ -358,7 +358,7 @@ UA_Server_freezeWriterGroupConfiguration(UA_Server *server, const UA_NodeId writ
         const UA_Byte *bufEnd = &wg->bufferedMessage.buffer.data[wg->bufferedMessage.buffer.length];
         UA_Byte *bufPos = wg->bufferedMessage.buffer.data;
         UA_NetworkMessage_encodeBinary(&networkMessage, &bufPos, bufEnd, NULL);
-        
+
         UA_free(networkMessage.payload.dataSetPayload.sizes);
         /* Clean up DSM */
         for(size_t i = 0; i < dsmCount; i++){
@@ -1248,7 +1248,7 @@ UA_WriterGroup_setPubSubState(UA_Server *server, UA_PubSubState state, UA_Writer
                     UA_PubSubManager_removeRepeatedPubSubCallback(server, writerGroup->publishCallbackId);
                     LIST_FOREACH(dataSetWriter, &writerGroup->writers, listEntry){
                         UA_DataSetWriter_setPubSubState(server, UA_PUBSUBSTATE_ERROR, dataSetWriter);
-                    }      
+                    }
                     break;
                 case UA_PUBSUBSTATE_ERROR:
                     return UA_STATUSCODE_GOOD;
@@ -2126,24 +2126,78 @@ sendNetworkMessage(UA_PubSubConnection *connection, UA_WriterGroup *wg,
     memset(bufPos, 0, msgSize);
     UA_Byte *bufEnd = &buf.data[buf.length];
     UA_Byte *encryptStart = NULL;
-    retval = UA_NetworkMessage_encodeBinary(&nm, &bufPos, bufEnd, &encryptStart);
+
+    UA_Byte *networkMessageStart = bufPos;
+    retval = UA_NetworkMessage_encodeHeaders(&nm, &bufPos, bufEnd);
     if(retval != UA_STATUSCODE_GOOD) {
         if(msgSize > UA_MAX_STACKBUF)
             UA_ByteString_clear(&buf);
         goto cleanup;
     }
 
-    /* Encrypt the message */
-#ifdef UA_ENABLE_PUBSUB_ENCRYPTION
-    retval = UA_NetworkMessage_signEncrypt(&nm, wg->config.securityMode,
-                                           wg->config.securityPolicy,
-                                           wg->securityPolicyContext,
-                                           buf.data, encryptStart, bufPos);
+    UA_Byte *payloadStart = bufPos;
+    retval = UA_NetworkMessage_encodePayload(&nm, &bufPos, bufEnd);
     if(retval != UA_STATUSCODE_GOOD) {
         if(msgSize > UA_MAX_STACKBUF)
             UA_ByteString_clear(&buf);
         goto cleanup;
     }
+    UA_Byte *payloadEnd = bufPos;
+
+    UA_Byte *footerStart = bufPos;
+    retval = UA_NetworkMessage_encodeFooters(&nm, &bufPos, bufEnd);
+    if(retval != UA_STATUSCODE_GOOD) {
+        if(msgSize > UA_MAX_STACKBUF)
+            UA_ByteString_clear(&buf);
+        goto cleanup;
+    }
+    UA_Byte *footerEnd = bufPos;
+
+    /* Encrypt and Sign the message */
+#ifdef UA_ENABLE_PUBSUB_ENCRYPTION
+
+    void *channelContext = wg->securityPolicyContext;
+
+    if(nm.securityHeader.networkMessageEncrypted) {
+        /* Set the temporary MessageNonce in the SecurityPolicy */
+        retval = wg->config.securityPolicy->setMessageNonce(channelContext, &nm.securityHeader.messageNonce);
+        if(retval != UA_STATUSCODE_GOOD) {
+            if(msgSize > UA_MAX_STACKBUF)
+                UA_ByteString_clear(&buf);
+            goto cleanup;
+        }
+
+        /* The encryption is done in-place, no need to encode again */
+        UA_ByteString toBeEncrypted = {(uintptr_t)footerEnd - (uintptr_t)payloadStart,
+                                       payloadStart};
+        retval = wg->config.securityPolicy->symmetricModule.cryptoModule.encryptionAlgorithm
+            .encrypt(channelContext, &toBeEncrypted);
+
+        if(retval != UA_STATUSCODE_GOOD) {
+            if(msgSize > UA_MAX_STACKBUF)
+                UA_ByteString_clear(&buf);
+            goto cleanup;
+        }
+    }
+
+    if(nm.securityHeader.networkMessageSigned) {
+        UA_ByteString toBeSigned = {(uintptr_t)footerEnd - (uintptr_t)networkMessageStart,
+                                    networkMessageStart};
+
+        size_t sigSize = wg->config.securityPolicy->symmetricModule.cryptoModule.
+            signatureAlgorithm.getLocalSignatureSize(channelContext);
+        UA_ByteString signature = {sigSize, footerEnd};
+        retval = wg->config.securityPolicy->symmetricModule.cryptoModule.
+            signatureAlgorithm.sign(channelContext, &toBeSigned, &signature);
+
+        if(retval != UA_STATUSCODE_GOOD) {
+            if(msgSize > UA_MAX_STACKBUF)
+                UA_ByteString_clear(&buf);
+            goto cleanup;
+        }
+    }
+
+
 #endif
 
     /* Send the prepared messages */
