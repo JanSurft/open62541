@@ -1011,13 +1011,47 @@ void UA_ReaderGroup_subscribeCallback(UA_Server *server, UA_ReaderGroup *readerG
 
 #ifdef UA_ENABLE_PUBSUB_ENCRYPTION
 
+                void *channelContext = readerGroup->securityPolicyContext;
+                size_t sigSize = 0;
+                
+                if (currentNetworkMessage.securityHeader.networkMessageSigned) {
 
+                    sigSize = readerGroup->config.securityPolicy->symmetricModule
+                        .cryptoModule.signatureAlgorithm.getLocalSignatureSize(channelContext);
+
+                    UA_ByteString toBeVerified = {buffer.length - sigSize, buffer.data};
+                    UA_ByteString signature = {sigSize, buffer.data + buffer.length - sigSize};
+
+                    UA_StatusCode rv = readerGroup->config.securityPolicy->symmetricModule.cryptoModule 
+                        .signatureAlgorithm.verify(channelContext, &toBeVerified, &signature);
+
+                    if (rv != UA_STATUSCODE_GOOD) {
+                        // TODO: decide what to do on verify fail
+                        UA_LOG_ERROR(&server->config.logger, UA_LOGCATEGORY_SECURITYPOLICY,
+                                "PubSub receive. Invalid Signature");
+                    }
+                }
+
+                if (currentNetworkMessage.securityHeader.networkMessageEncrypted) {
+
+                    UA_ByteString toBeDecrypted = {buffer.length - currentPosition - sigSize, buffer.data + currentPosition};
+                    UA_StatusCode rv = readerGroup->config.securityPolicy->symmetricModule.cryptoModule 
+                        .encryptionAlgorithm.decrypt(channelContext, &toBeDecrypted);
+
+                    if (rv != UA_STATUSCODE_GOOD) {
+                        // TODO: decide what to do on decrypt fail
+                        UA_LOG_ERROR(&server->config.logger, UA_LOGCATEGORY_SECURITYPOLICY, 
+                                "PubSub receive. Faulty Decryption");
+                    }
+                }
 
                 // UA_NetworkMessage_decrypt(&buffer, &currentPosition, &currentNetworkMessage);
 
 #endif
+                UA_NetworkMessage_decodePayload(&buffer, &currentPosition, &currentNetworkMessage);
+                UA_NetworkMessage_decodeFooters(&buffer, &currentPosition, &currentNetworkMessage);
 
-                UA_NetworkMessage_decodeBinary(&buffer, &currentPosition, &currentNetworkMessage);
+                // UA_NetworkMessage_decodeBinary(&buffer, &currentPosition, &currentNetworkMessage);
                 /* TODO: We already know the ReaderGroup at this point. Now we loose that information.
                  * There is only one place where UA_PubSubConnection_processNetworkMessage is used. */
                 UA_PubSubConnection_processNetworkMessage(server, connection, &currentNetworkMessage);

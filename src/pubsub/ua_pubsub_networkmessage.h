@@ -320,15 +320,18 @@ UA_NetworkMessage_encodeFooters(const UA_NetworkMessage* src,
 // UA_ExtendedNetworkMessageHeader_encodeBinary(const UA_NetworkMessage* src,
 //                                UA_Byte **bufPos, const UA_Byte *bufEnd);
 
-
-
 /**
- * NetworkMessage Decoding 
+ * NetworkMessage Decoding
  * ^^^^^^^^^^^^^^^^^^^^^^^ */
 
 UA_StatusCode
 UA_NetworkMessage_decodeHeaders(const UA_ByteString *src, size_t *offset, UA_NetworkMessage *dst);
 
+UA_StatusCode
+UA_NetworkMessage_decodePayload(const UA_ByteString *src, size_t *offset, UA_NetworkMessage *dst);
+
+UA_StatusCode
+UA_NetworkMessage_decodeFooters(const UA_ByteString *src, size_t *offset, UA_NetworkMessage *dst);
 
 UA_StatusCode
 UA_NetworkMessage_decodeBinary(const UA_ByteString *src, size_t *offset,
