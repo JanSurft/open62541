@@ -1012,6 +1012,7 @@ void UA_ReaderGroup_subscribeCallback(UA_Server *server, UA_ReaderGroup *readerG
 #ifdef UA_ENABLE_PUBSUB_ENCRYPTION
 
 
+
                 // UA_NetworkMessage_decrypt(&buffer, &currentPosition, &currentNetworkMessage);
 
 #endif
@@ -1077,6 +1078,43 @@ UA_ReaderGroup_addSubscribeCallback(UA_Server *server, UA_ReaderGroup *readerGro
 
     return retval;
 }
+
+#ifdef UA_ENABLE_PUBSUB_ENCRYPTION
+UA_StatusCode
+UA_Server_setReaderGroupEncryptionKeys(UA_Server *server, const UA_NodeId readerGroup,
+                                       UA_UInt32 securityTokenId,
+                                       const UA_ByteString signingKey,
+                                       const UA_ByteString encryptingKey,
+                                       const UA_ByteString keyNonce) {
+    UA_ReaderGroup *rg = UA_ReaderGroup_findRGbyId(server, readerGroup);
+    if(!rg)
+        return UA_STATUSCODE_BADNOTFOUND;
+
+    if(!rg->config.securityPolicy) {
+        UA_LOG_WARNING(&server->config.logger, UA_LOGCATEGORY_SERVER,
+                       "No SecurityPolicy configured for the ReaderGroup");
+        return UA_STATUSCODE_BADINTERNALERROR;
+    }
+
+    if(securityTokenId != rg->securityTokenId) {
+        rg->securityTokenId = securityTokenId;
+        rg->nonceSequenceNumber = 1;
+    }
+
+    /* Create a new context */
+    if(!rg->securityPolicyContext) {
+        return rg->config.securityPolicy->
+            newContext(rg->config.securityPolicy->policyContext,
+                       &signingKey, &encryptingKey, &keyNonce,
+                       &rg->securityPolicyContext);
+    }
+
+    /* Update the context */
+    return rg->config.securityPolicy->
+        setSecurityKeys(rg->securityPolicyContext, &signingKey, &encryptingKey, &keyNonce);
+}
+#endif
+
 
 /**********/
 /* Reader */
