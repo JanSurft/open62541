@@ -146,8 +146,9 @@ UA_NetworkMessage_updateBufferedNwMessage(UA_NetworkMessageOffsetBuffer *buffer,
 }
 
 UA_StatusCode
-UA_NetworkMessage_encodeBinary(const UA_NetworkMessage* src, UA_Byte **bufPos,
-                               const UA_Byte *bufEnd, UA_Byte **dataToEncryptStart) {
+UA_NetworkMessageHeader_encodeBinary(const UA_NetworkMessage *src, UA_Byte **bufPos,
+                                     const UA_Byte *bufEnd) {
+
     /* UADPVersion + UADP Flags */
     UA_Byte v = src->version;
     if(src->publisherIdEnabled)
@@ -202,8 +203,7 @@ UA_NetworkMessage_encodeBinary(const UA_NetworkMessage* src, UA_Byte **bufPos,
                 v |= NM_PROMOTEDFIELDS_ENABLED_MASK;
 
             rv = UA_Byte_encodeBinary(&v, bufPos, bufEnd);
-            if(rv != UA_STATUSCODE_GOOD)
-                return rv;
+            if(rv != UA_STATUSCODE_GOOD) return rv;
         }
     }
 
@@ -235,87 +235,140 @@ UA_NetworkMessage_encodeBinary(const UA_NetworkMessage* src, UA_Byte **bufPos,
             break;
         }
     
-        if(rv != UA_STATUSCODE_GOOD)
-            return rv;
+        if(rv != UA_STATUSCODE_GOOD) return rv;
     }
 
     // DataSetClassId
     if(src->dataSetClassIdEnabled) {
         rv = UA_Guid_encodeBinary(&(src->dataSetClassId), bufPos, bufEnd);
+        if(rv != UA_STATUSCODE_GOOD) return rv;
+    }
+    return UA_STATUSCODE_GOOD;
+}
+
+UA_StatusCode 
+UA_GroupHeader_encodeBinary(const UA_NetworkMessage* src, UA_Byte **bufPos,
+                               const UA_Byte *bufEnd) {
+
+    UA_Byte v = 0;
+
+    if(src->groupHeader.writerGroupIdEnabled)
+        v |= GROUP_HEADER_WRITER_GROUPID_ENABLED;
+
+    if(src->groupHeader.groupVersionEnabled)
+        v |= GROUP_HEADER_GROUP_VERSION_ENABLED;
+
+    if(src->groupHeader.networkMessageNumberEnabled)
+        v |= GROUP_HEADER_NM_NUMBER_ENABLED;
+
+    if(src->groupHeader.sequenceNumberEnabled)
+        v |= GROUP_HEADER_SEQUENCE_NUMBER_ENABLED;
+
+    UA_StatusCode rv = UA_Byte_encodeBinary(&v, bufPos, bufEnd);
+    if(rv != UA_STATUSCODE_GOOD)
+        return rv;
+
+    if(src->groupHeader.writerGroupIdEnabled) {
+        rv = UA_UInt16_encodeBinary(&(src->groupHeader.writerGroupId), bufPos, bufEnd);
         if(rv != UA_STATUSCODE_GOOD)
             return rv;
     }
+
+    if(src->groupHeader.groupVersionEnabled) { 
+        rv = UA_UInt32_encodeBinary(&(src->groupHeader.groupVersion), bufPos, bufEnd);
+        if(rv != UA_STATUSCODE_GOOD)
+            return rv;
+    }
+
+    if(src->groupHeader.networkMessageNumberEnabled) {
+        rv = UA_UInt16_encodeBinary(&(src->groupHeader.networkMessageNumber), bufPos, bufEnd);
+        if(rv != UA_STATUSCODE_GOOD)
+            return rv;
+    }
+
+    if(src->groupHeader.sequenceNumberEnabled) {
+        rv = UA_UInt16_encodeBinary(&(src->groupHeader.sequenceNumber), bufPos, bufEnd);
+        if(rv != UA_STATUSCODE_GOOD)
+            return rv;
+    }
+    return UA_STATUSCODE_GOOD;
+}
+
+UA_StatusCode 
+UA_PayloadHeader_encodeBinary(const UA_NetworkMessage* src, UA_Byte **bufPos,
+                               const UA_Byte *bufEnd) {
+
+    if(src->networkMessageType != UA_NETWORKMESSAGE_DATASET)
+        return UA_STATUSCODE_BADNOTIMPLEMENTED;
+        
+    UA_StatusCode rv = UA_Byte_encodeBinary(&(src->payloadHeader.dataSetPayloadHeader.count), bufPos, bufEnd);
+    if (rv != UA_STATUSCODE_GOOD) 
+        return rv;
+
+    if(src->payloadHeader.dataSetPayloadHeader.dataSetWriterIds == NULL)
+        return UA_STATUSCODE_BADENCODINGERROR;
+        
+    for(UA_Byte i = 0; i < src->payloadHeader.dataSetPayloadHeader.count; i++) {
+        rv = UA_UInt16_encodeBinary(&(src->payloadHeader.dataSetPayloadHeader.dataSetWriterIds[i]),
+                                    bufPos, bufEnd);
+        if(rv != UA_STATUSCODE_GOOD)
+            return rv;
+    }
+    return UA_STATUSCODE_GOOD;
+}
+ 
+UA_StatusCode 
+UA_NetworkMessage_encodeHeaders(const UA_NetworkMessage* src, UA_Byte **bufPos,
+                               const UA_Byte *bufEnd) {
+
+    UA_StatusCode rv = UA_NetworkMessageHeader_encodeBinary(src, bufPos, bufEnd);
+    if (rv != UA_STATUSCODE_GOOD)
+        return rv;
 
     // Group Header
     if(src->groupHeaderEnabled) {
-        v = 0;
-
-        if(src->groupHeader.writerGroupIdEnabled)
-            v |= GROUP_HEADER_WRITER_GROUPID_ENABLED;
-
-        if(src->groupHeader.groupVersionEnabled)
-            v |= GROUP_HEADER_GROUP_VERSION_ENABLED;
-
-        if(src->groupHeader.networkMessageNumberEnabled)
-            v |= GROUP_HEADER_NM_NUMBER_ENABLED;
-
-        if(src->groupHeader.sequenceNumberEnabled)
-            v |= GROUP_HEADER_SEQUENCE_NUMBER_ENABLED;
-
-        rv = UA_Byte_encodeBinary(&v, bufPos, bufEnd);
-        if(rv != UA_STATUSCODE_GOOD)
+        rv = UA_GroupHeader_encodeBinary(src, bufPos, bufEnd);
+        if (rv != UA_STATUSCODE_GOOD)
             return rv;
-
-        if(src->groupHeader.writerGroupIdEnabled) {
-            rv = UA_UInt16_encodeBinary(&(src->groupHeader.writerGroupId), bufPos, bufEnd);
-            if(rv != UA_STATUSCODE_GOOD)
-                return rv;
-        }
-
-        if(src->groupHeader.groupVersionEnabled) { 
-            rv = UA_UInt32_encodeBinary(&(src->groupHeader.groupVersion), bufPos, bufEnd);
-            if(rv != UA_STATUSCODE_GOOD)
-                return rv;
-        }
-
-        if(src->groupHeader.networkMessageNumberEnabled) {
-            rv = UA_UInt16_encodeBinary(&(src->groupHeader.networkMessageNumber), bufPos, bufEnd);
-            if(rv != UA_STATUSCODE_GOOD)
-                return rv;
-        }
-
-        if(src->groupHeader.sequenceNumberEnabled) {
-            rv = UA_UInt16_encodeBinary(&(src->groupHeader.sequenceNumber), bufPos, bufEnd);
-            if(rv != UA_STATUSCODE_GOOD)
-                return rv;
-        }
     }
 
-    // Payload-Header
+    // Payload Header
     if(src->payloadHeaderEnabled) {
-        if(src->networkMessageType != UA_NETWORKMESSAGE_DATASET)
-            return UA_STATUSCODE_BADNOTIMPLEMENTED;
-            
-        rv = UA_Byte_encodeBinary(&(src->payloadHeader.dataSetPayloadHeader.count), bufPos, bufEnd);
-
-        if(src->payloadHeader.dataSetPayloadHeader.dataSetWriterIds == NULL)
-            return UA_STATUSCODE_BADENCODINGERROR;
-            
-        for(UA_Byte i = 0; i < src->payloadHeader.dataSetPayloadHeader.count; i++) {
-            rv = UA_UInt16_encodeBinary(&(src->payloadHeader.dataSetPayloadHeader.dataSetWriterIds[i]),
-                                        bufPos, bufEnd);
-            if(rv != UA_STATUSCODE_GOOD)
-                return rv;
-        }
+        rv = UA_PayloadHeader_encodeBinary(src, bufPos, bufEnd);
+        if (rv != UA_STATUSCODE_GOOD)
+            return rv;
     }
+   
+    // Extended Network Message Header
+    rv = UA_ExtendedNetworkMessageHeader_encodeBinary(src, bufPos, bufEnd);
+    if (rv != UA_STATUSCODE_GOOD)
+        return rv;
 
+    // SecurityHeader
+    if(src->securityEnabled) {
+        rv = UA_SecurityHeader_encodeBinary(src, bufPos, bufEnd);
+        if (rv != UA_STATUSCODE_GOOD)
+            return rv;
+    }
+    return UA_STATUSCODE_GOOD;
+}
+
+UA_StatusCode 
+UA_ExtendedNetworkMessageHeader_encodeBinary(const UA_NetworkMessage* src, UA_Byte **bufPos,
+                               const UA_Byte *bufEnd) {
+
+    UA_StatusCode rv = UA_STATUSCODE_GOOD;
     // Timestamp
     if(src->timestampEnabled)
         rv = UA_DateTime_encodeBinary(&(src->timestamp), bufPos, bufEnd);
 
+    if (rv != UA_STATUSCODE_GOOD) return rv;
+
     // Picoseconds
     if(src->picosecondsEnabled)
         rv = UA_UInt16_encodeBinary(&(src->picoseconds), bufPos, bufEnd);
+
+    if (rv != UA_STATUSCODE_GOOD) return rv;
 
     // PromotedFields
     if(src->promotedFieldsEnabled) {
@@ -325,60 +378,75 @@ UA_NetworkMessage_encodeBinary(const UA_NetworkMessage* src, UA_Byte **bufPos,
             pfSize = (UA_UInt16) (pfSize + UA_Variant_calcSizeBinary(&src->promotedFields[i]));
         rv |= UA_UInt16_encodeBinary(&pfSize, bufPos, bufEnd);
 
+        if (rv != UA_STATUSCODE_GOOD) return rv;
+
         for (UA_UInt16 i = 0; i < src->promotedFieldsSize; i++)
             rv |= UA_Variant_encodeBinary(&(src->promotedFields[i]), bufPos, bufEnd);
+
+        if (rv != UA_STATUSCODE_GOOD) return rv;
+    }
+    return UA_STATUSCODE_GOOD;
+}
+
+
+UA_StatusCode 
+UA_SecurityHeader_encodeBinary(const UA_NetworkMessage* src, UA_Byte **bufPos,
+                               const UA_Byte *bufEnd) {
+    // SecurityFlags
+    UA_Byte v = 0;
+    if(src->securityHeader.networkMessageSigned)
+        v |= SECURITY_HEADER_NM_SIGNED;
+
+    if(src->securityHeader.networkMessageEncrypted)
+        v |= SECURITY_HEADER_NM_ENCRYPTED;
+
+    if(src->securityHeader.securityFooterEnabled)
+        v |= SECURITY_HEADER_SEC_FOOTER_ENABLED;
+
+    if(src->securityHeader.forceKeyReset)
+        v |= SECURITY_HEADER_FORCE_KEY_RESET;
+
+    UA_StatusCode rv = UA_Byte_encodeBinary(&v, bufPos, bufEnd);
+    if(rv != UA_STATUSCODE_GOOD)
+        return rv;
+
+    // SecurityTokenId
+    rv = UA_UInt32_encodeBinary(&src->securityHeader.securityTokenId, bufPos, bufEnd);
+    if(rv != UA_STATUSCODE_GOOD)
+        return rv;
+
+    // NonceLength
+    UA_Byte nonceLength = (UA_Byte)src->securityHeader.messageNonce.length;
+    rv = UA_Byte_encodeBinary(&nonceLength, bufPos, bufEnd);
+    if(rv != UA_STATUSCODE_GOOD)
+        return rv;
+
+    // MessageNonce
+    for (UA_Byte i = 0; i < src->securityHeader.messageNonce.length; i++) {
+        rv = UA_Byte_encodeBinary(&src->securityHeader.messageNonce.data[i],
+                                  bufPos, bufEnd);
+        if(rv != UA_STATUSCODE_GOOD)
+            return rv;
     }
 
-    // SecurityHeader
-    if(src->securityEnabled) {
-        // SecurityFlags
-        v = 0;
-        if(src->securityHeader.networkMessageSigned)
-            v |= SECURITY_HEADER_NM_SIGNED;
-
-        if(src->securityHeader.networkMessageEncrypted)
-            v |= SECURITY_HEADER_NM_ENCRYPTED;
-
-        if(src->securityHeader.securityFooterEnabled)
-            v |= SECURITY_HEADER_SEC_FOOTER_ENABLED;
-
-        if(src->securityHeader.forceKeyReset)
-            v |= SECURITY_HEADER_FORCE_KEY_RESET;
-
-        rv = UA_Byte_encodeBinary(&v, bufPos, bufEnd);
+    // SecurityFooterSize
+    if(src->securityHeader.securityFooterEnabled) {
+        rv = UA_UInt16_encodeBinary(&src->securityHeader.securityFooterSize,
+                                    bufPos, bufEnd);
         if(rv != UA_STATUSCODE_GOOD)
             return rv;
-
-        // SecurityTokenId
-        rv = UA_UInt32_encodeBinary(&src->securityHeader.securityTokenId, bufPos, bufEnd);
-        if(rv != UA_STATUSCODE_GOOD)
-            return rv;
-
-        // NonceLength
-        UA_Byte nonceLength = (UA_Byte)src->securityHeader.messageNonce.length;
-        rv = UA_Byte_encodeBinary(&nonceLength, bufPos, bufEnd);
-        if(rv != UA_STATUSCODE_GOOD)
-            return rv;
-
-        // MessageNonce
-        for (UA_Byte i = 0; i < src->securityHeader.messageNonce.length; i++) {
-            rv = UA_Byte_encodeBinary(&src->securityHeader.messageNonce.data[i],
-                                      bufPos, bufEnd);
-            if(rv != UA_STATUSCODE_GOOD)
-                return rv;
-        }
-
-        // SecurityFooterSize
-        if(src->securityHeader.securityFooterEnabled) {
-            rv = UA_UInt16_encodeBinary(&src->securityHeader.securityFooterSize,
-                                        bufPos, bufEnd);
-            if(rv != UA_STATUSCODE_GOOD)
-                return rv;
-        }
     }
 
-    if(dataToEncryptStart)
-        *dataToEncryptStart = *bufPos;
+    return UA_STATUSCODE_GOOD;
+}
+
+
+
+UA_StatusCode 
+UA_NetworkMessage_encodePayload(const UA_NetworkMessage* src, UA_Byte **bufPos,
+                               const UA_Byte *bufEnd) {
+
+    UA_StatusCode rv = UA_STATUSCODE_GOOD;
 
     // Payload
     if(src->networkMessageType != UA_NETWORKMESSAGE_DATASET)
@@ -413,16 +481,43 @@ UA_NetworkMessage_encodeBinary(const UA_NetworkMessage* src, UA_Byte **bufPos,
             return rv;
     }
 
+    return UA_STATUSCODE_GOOD;
+}
+
+UA_StatusCode
+UA_NetworkMessage_encodeFooters(const UA_NetworkMessage* src, UA_Byte **bufPos,
+                               const UA_Byte *bufEnd) {
+
     if(src->securityEnabled) {
         // SecurityFooter
         if(src->securityHeader.securityFooterEnabled) {
             for(UA_Byte i = 0; i < src->securityHeader.securityFooterSize; i++) {
-                rv = UA_Byte_encodeBinary(&(src->securityFooter.data[i]), bufPos, bufEnd);
-                if(rv != UA_STATUSCODE_GOOD)
+                UA_StatusCode rv = UA_Byte_encodeBinary(&(src->securityFooter.data[i]), bufPos, bufEnd);
+                if(rv != UA_STATUSCODE_GOOD) {
                     return rv;
+                }
             }
         }
     }
+    return UA_STATUSCODE_GOOD;
+}
+
+UA_StatusCode
+UA_NetworkMessage_encodeBinary(const UA_NetworkMessage* src, UA_Byte **bufPos,
+                               const UA_Byte *bufEnd, UA_Byte **dataToEncryptStart) {
+
+    UA_StatusCode rv = UA_NetworkMessage_encodeHeaders(src, bufPos, bufEnd);
+    if (rv != UA_STATUSCODE_GOOD) return rv;
+
+    if(dataToEncryptStart) {
+        *dataToEncryptStart = *bufPos; 
+    }
+
+    rv = UA_NetworkMessage_encodePayload(src, bufPos, bufEnd);
+    if (rv != UA_STATUSCODE_GOOD) return rv;
+
+    rv = UA_NetworkMessage_encodeFooters(src, bufPos, bufEnd);
+    if (rv != UA_STATUSCODE_GOOD) return rv;
 
     return UA_STATUSCODE_GOOD;
 }

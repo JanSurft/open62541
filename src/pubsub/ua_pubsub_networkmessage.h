@@ -260,12 +260,57 @@ UA_StatusCode
 UA_NetworkMessage_updateBufferedNwMessage(UA_NetworkMessageOffsetBuffer *buffer,
                                           const UA_ByteString *src, size_t *bufferPosition);
 
+
+/**
+ * NetworkMessage Encoding
+ * ^^^^^^^^^^^^^^^^^^^^^^^ */
+
 /* If dataToEncryptStart not-NULL, then it will be set to the start-position of
  * the payload in the buffer. */
 UA_StatusCode
 UA_NetworkMessage_encodeBinary(const UA_NetworkMessage* src,
                                UA_Byte **bufPos, const UA_Byte *bufEnd,
                                UA_Byte **dataToEncryptStart);
+
+UA_StatusCode
+UA_NetworkMessage_encodeHeaders(const UA_NetworkMessage* src,
+                               UA_Byte **bufPos, const UA_Byte *bufEnd);
+
+UA_StatusCode
+UA_NetworkMessage_encodePayload(const UA_NetworkMessage* src,
+                               UA_Byte **bufPos, const UA_Byte *bufEnd);
+
+UA_StatusCode
+UA_NetworkMessage_encodeFooters(const UA_NetworkMessage* src,
+                               UA_Byte **bufPos, const UA_Byte *bufEnd);
+
+UA_StatusCode
+UA_NetworkMessageHeader_encodeBinary(const UA_NetworkMessage* src,
+                               UA_Byte **bufPos, const UA_Byte *bufEnd);
+
+UA_StatusCode
+UA_GroupHeader_encodeBinary(const UA_NetworkMessage* src,
+                               UA_Byte **bufPos, const UA_Byte *bufEnd);
+
+UA_StatusCode
+UA_SecurityHeader_encodeBinary(const UA_NetworkMessage* src,
+                               UA_Byte **bufPos, const UA_Byte *bufEnd);
+
+UA_StatusCode
+UA_PayloadHeader_encodeBinary(const UA_NetworkMessage* src,
+                               UA_Byte **bufPos, const UA_Byte *bufEnd);
+
+UA_StatusCode
+UA_ExtendedNetworkMessageHeader_encodeBinary(const UA_NetworkMessage* src,
+                               UA_Byte **bufPos, const UA_Byte *bufEnd);
+
+
+
+
+/**
+ * NetworkMessage Decoding 
+ * ^^^^^^^^^^^^^^^^^^^^^^^ */
+
 
 UA_StatusCode
 UA_NetworkMessage_decodeBinary(const UA_ByteString *src, size_t *offset,
