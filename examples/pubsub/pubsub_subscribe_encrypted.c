@@ -117,6 +117,15 @@ addReaderGroup(UA_Server *server) {
     retval |= UA_Server_addReaderGroup(server, connectionIdentifier, &readerGroupConfig,
                                        &readerGroupIdentifier);
     UA_Server_setReaderGroupOperational(server, readerGroupIdentifier);
+
+    /* Add the encryption key informaton */
+    UA_ByteString sk = {UA_AES128CTR_SIGNING_KEY_LENGTH, signingKey};
+    UA_ByteString ek = {UA_AES128CTR_KEY_LENGTH, encryptingKey};
+    UA_ByteString kn = {UA_AES128CTR_KEYNONCE_LENGTH, keyNonce};
+
+    // TODO security token not necessary for readergroup (extracted from security-header)
+    UA_Server_setReaderGroupEncryptionKeys(server, readerGroupIdentifier, 1, sk, ek, kn);
+
     return retval;
 }
 
@@ -287,6 +296,10 @@ static void fillTestDataSetMetaData(UA_DataSetMetaDataType *pMetaData) {
     pMetaData->fields[3].valueRank = -1; /* scalar */
 }
 
+/*
+ * TODO: add something similary ass addDataSetMetadata for security configuration
+ */
+
 /**
  * Followed by the main server code, making use of the above definitions */
 UA_Boolean running = true;
@@ -362,7 +375,6 @@ int main(int argc, char **argv) {
         if (strcmp(argv[1], "-h") == 0) {
             usage(argv[0]);
             return EXIT_SUCCESS;
-        
         }
 
         if (strncmp(argv[1], "opc.udp://", 10) == 0) {
