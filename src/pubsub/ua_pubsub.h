@@ -262,6 +262,12 @@ struct UA_ReaderGroup {
     UA_PubSubState state;
     /* This flag is 'read only' and is set internally based on the PubSub state. */
     UA_Boolean configurationFrozen;
+
+#ifdef UA_ENABLE_PUBSUB_ENCRYPTION
+    UA_UInt32 securityTokenId;
+    UA_UInt32 nonceSequenceNumber; /* To be part of the MessageNonce */
+    void *securityPolicyContext;
+#endif
 };
 
 /* Copy configuration of ReaderGroup */
