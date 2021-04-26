@@ -84,3 +84,6 @@ Makefile
 Pipfile
 Pipfile.lock
 .vscode
+
+# clangd cache
+.cache/
