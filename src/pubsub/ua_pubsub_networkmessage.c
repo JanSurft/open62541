@@ -665,16 +665,10 @@ UA_GroupHeader_decodeBinary(const UA_ByteString *src, size_t *offset,
 
     return UA_STATUSCODE_GOOD;
 }
-static UA_StatusCode
-UA_SecurityHeader_decodeBinary(const UA_ByteString *src, size_t *offset,
-                                       UA_NetworkMessage* dst) {
-    UA_Byte decoded = 0;
-}
 
 static UA_StatusCode
 UA_PayloadHeader_decodeBinary(const UA_ByteString *src, size_t *offset,
                               UA_NetworkMessage* dst) {
-    UA_Byte decoded = 0;
 
     if(dst->networkMessageType != UA_NETWORKMESSAGE_DATASET)
         return UA_STATUSCODE_BADNOTIMPLEMENTED;
@@ -753,7 +747,7 @@ UA_ExtendedNetworkMessageHeader_decodeBinary(const UA_ByteString *src, size_t *o
 }
 
 static UA_StatusCode
-UA_SecurityFooter_decodeBinary(const UA_ByteString *src, size_t *offset,
+UA_SecurityHeader_decodeBinary(const UA_ByteString *src, size_t *offset,
                               UA_NetworkMessage* dst) {
     UA_Byte decoded = 0;
     // SecurityFlags
@@ -803,31 +797,6 @@ UA_SecurityFooter_decodeBinary(const UA_ByteString *src, size_t *offset,
         rv = UA_UInt16_decodeBinary(src, offset, &dst->securityHeader.securityFooterSize);
         if(rv != UA_STATUSCODE_GOOD)
             return rv;
-    }
-
-    return UA_STATUSCODE_GOOD;
-}
-
-
-static UA_StatusCode
-UA_NetworkMessage_decode(const UA_ByteString *src, size_t *offset,
-                                       UA_NetworkMessage* dst) {
-
-    if(dst->securityEnabled) {
-        // SecurityFooter
-        if(dst->securityHeader.securityFooterEnabled &&
-           (dst->securityHeader.securityFooterSize > 0)) {
-            UA_StatusCode rv = UA_ByteString_allocBuffer(&dst->securityFooter,
-                                           dst->securityHeader.securityFooterSize);
-            if(rv != UA_STATUSCODE_GOOD)
-                return rv;
-
-            for(UA_Byte i = 0; i < dst->securityHeader.securityFooterSize; i++) {
-                rv = UA_Byte_decodeBinary(src, offset, &(dst->securityFooter.data[i]));
-                if(rv != UA_STATUSCODE_GOOD)
-                    return rv;
-            }
-        }
     }
 
     return UA_STATUSCODE_GOOD;
@@ -921,15 +890,12 @@ UA_NetworkMessage_decodeFooters(const UA_ByteString *src, size_t *offset, UA_Net
     return UA_STATUSCODE_GOOD;
 }
 
-
 // UA_StatusCode
 // UA_NetworkMessage_decodeBinary(const UA_ByteString *src, size_t *offset,
 //                                UA_NetworkMessage* dst) {
 //     UA_StatusCode retval = UA_NetworkMessage_decodeBinaryInternal(src, offset, dst);
-// 
 //     if(retval != UA_STATUSCODE_GOOD)
 //         UA_NetworkMessage_clear(dst);
-// 
 //     return retval;
 // }
 
@@ -1127,7 +1093,6 @@ UA_NetworkMessage_clear(UA_NetworkMessage* p) {
                 UA_Array_delete(p->payloadHeader.dataSetPayloadHeader.dataSetWriterIds,
                                 p->payloadHeader.dataSetPayloadHeader.count, &UA_TYPES[UA_TYPES_UINT16]);
             }
-
             if(p->payload.dataSetPayload.sizes != NULL) { 
                 UA_Array_delete(p->payload.dataSetPayload.sizes,
                                 p->payloadHeader.dataSetPayloadHeader.count, &UA_TYPES[UA_TYPES_UINT16]);
