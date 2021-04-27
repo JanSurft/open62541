@@ -44,6 +44,10 @@ UA_Server_ReaderGroup_clear(UA_Server* server, UA_ReaderGroup *readerGroup);
 static void
 UA_DataSetReader_clear(UA_Server *server, UA_DataSetReader *dataSetReader);
 
+UA_StatusCode
+receiveNetworkMessage(const UA_Server *server, UA_ReaderGroup *readerGroup,
+                      UA_ByteString *buffer, size_t *currentPosition,
+                      UA_NetworkMessage *currentNetworkMessage);
 static void
 UA_PubSubDSRDataSetField_sampleValue(UA_Server *server, UA_DataSetReader *dataSetReader,
                                      UA_DataValue *value, size_t fieldNumber) {
@@ -906,6 +910,78 @@ static void UA_DataSetMessage_freeDecodedPayload(UA_DataSetMessage *dsm) {
     }
 }
 
+UA_StatusCode
+receiveNetworkMessage(const UA_Server *server, UA_ReaderGroup *readerGroup,
+                      UA_ByteString *buffer, size_t *currentPosition,
+                      UA_NetworkMessage *currentNetworkMessage) {
+
+    UA_StatusCode retval = UA_NetworkMessage_decodeHeaders(buffer, currentPosition, currentNetworkMessage);
+    if(retval != UA_STATUSCODE_GOOD) return retval;
+
+#ifdef UA_ENABLE_PUBSUB_ENCRYPTION
+
+    void *channelContext = readerGroup->securityPolicyContext;
+    size_t sigSize = 0;
+
+    if ((*currentNetworkMessage).securityHeader.networkMessageSigned) {
+
+        sigSize = readerGroup->config.securityPolicy->symmetricModule
+            .cryptoModule.signatureAlgorithm.getLocalSignatureSize(channelContext);
+
+        UA_ByteString toBeVerified = {(*buffer).length - sigSize, (*buffer).data};
+        UA_ByteString signature = {sigSize, (*buffer).data + (*buffer).length - sigSize};
+
+        retval = readerGroup->config.securityPolicy->symmetricModule.cryptoModule
+            .signatureAlgorithm.verify(channelContext, &toBeVerified, &signature);
+
+        if (retval != UA_STATUSCODE_GOOD) {
+            // TODO: decide what to do on verify fail
+            UA_LOG_ERROR(&server->config.logger, UA_LOGCATEGORY_SECURITYPOLICY,
+                         "PubSub receive. Invalid Signature");
+            return retval;
+        } else {
+            UA_LOG_DEBUG(&server->config.logger, UA_LOGCATEGORY_SECURITYPOLICY,
+                         "PubSub receive. Signature Valid");
+        }
+
+        buffer->length -= sigSize;
+    }
+
+    if ((*currentNetworkMessage).securityHeader.networkMessageEncrypted) {
+
+        retval = readerGroup->config.securityPolicy
+            ->setMessageNonce(channelContext,
+                              &(*currentNetworkMessage).securityHeader.messageNonce);
+        if (retval != UA_STATUSCODE_GOOD) {
+            // TODO: decide what to do on nonce fail
+            UA_LOG_ERROR(&server->config.logger, UA_LOGCATEGORY_SECURITYPOLICY,
+                         "PubSub receive. Faulty Nonce set");
+            return retval;
+        }
+        UA_ByteString toBeDecrypted =
+            {(*buffer).length - (*currentPosition),
+             (*buffer).data + (*currentPosition)};
+        retval = readerGroup->config.securityPolicy->symmetricModule.cryptoModule
+            .encryptionAlgorithm.decrypt(channelContext, &toBeDecrypted);
+
+        if (retval != UA_STATUSCODE_GOOD) {
+            // TODO: decide what to do on decrypt fail
+            UA_LOG_ERROR(&server->config.logger, UA_LOGCATEGORY_SECURITYPOLICY,
+                         "PubSub receive. Faulty Decryption");
+            return retval;
+        }
+    }
+#endif
+    retval = UA_NetworkMessage_decodePayload(buffer, currentPosition, currentNetworkMessage);
+    if(retval != UA_STATUSCODE_GOOD) return retval;
+
+    retval = UA_NetworkMessage_decodeFooters(buffer, currentPosition, currentNetworkMessage);
+    if(retval != UA_STATUSCODE_GOOD) return retval;
+
+    return UA_STATUSCODE_GOOD;
+}
+
+
 /* This callback triggers the collection and reception of NetworkMessages and the
  * contained DataSetMessages. */
 void UA_ReaderGroup_subscribeCallback(UA_Server *server, UA_ReaderGroup *readerGroup) {
@@ -1003,65 +1079,23 @@ void UA_ReaderGroup_subscribeCallback(UA_Server *server, UA_ReaderGroup *readerG
         } else {
             UA_LOG_DEBUG(&server->config.logger, UA_LOGCATEGORY_USERLAND, "Message received:");
             do {
+
                 size_t paddingBytes = 0;
                 UA_NetworkMessage currentNetworkMessage;
                 memset(&currentNetworkMessage, 0, sizeof(UA_NetworkMessage));
 
-                UA_NetworkMessage_decodeHeaders(&buffer, &currentPosition, &currentNetworkMessage);
+                UA_StatusCode retval = receiveNetworkMessage(server, readerGroup, &buffer, &currentPosition,
+                                      &currentNetworkMessage);
 
-#ifdef UA_ENABLE_PUBSUB_ENCRYPTION
-
-                void *channelContext = readerGroup->securityPolicyContext;
-                size_t sigSize = 0;
-                
-                if (currentNetworkMessage.securityHeader.networkMessageSigned) {
-
-                    sigSize = readerGroup->config.securityPolicy->symmetricModule
-                        .cryptoModule.signatureAlgorithm.getLocalSignatureSize(channelContext);
-
-                    UA_ByteString toBeVerified = {buffer.length - sigSize, buffer.data};
-                    UA_ByteString signature = {sigSize, buffer.data + buffer.length - sigSize};
-
-                    UA_StatusCode rv = readerGroup->config.securityPolicy->symmetricModule.cryptoModule 
-                        .signatureAlgorithm.verify(channelContext, &toBeVerified, &signature);
-
-                    if (rv != UA_STATUSCODE_GOOD) {
-                        // TODO: decide what to do on verify fail
-                        UA_LOG_ERROR(&server->config.logger, UA_LOGCATEGORY_SECURITYPOLICY,
-                                "PubSub receive. Invalid Signature");
-                    } else {
-                        UA_LOG_DEBUG(&server->config.logger, UA_LOGCATEGORY_SECURITYPOLICY,
-                                     "PubSub receive. Signature Valid");
-                    }
+                if (UA_StatusCode_isBad(retval)) {
+                    UA_LOG_ERROR(&server->config.logger, UA_LOGCATEGORY_SERVER,
+                                 "Subscribe failed. receive network message failed.");
+                    UA_NetworkMessage_clear(&currentNetworkMessage);
+                    return;
                 }
 
-                if (currentNetworkMessage.securityHeader.networkMessageEncrypted) {
-
-                    UA_StatusCode rv = readerGroup->config.securityPolicy
-                        ->setMessageNonce(channelContext,
-                                          &currentNetworkMessage.securityHeader.messageNonce);
-                    if (rv != UA_STATUSCODE_GOOD) {
-                        // TODO: decide what to do on nonce fail
-                        UA_LOG_ERROR(&server->config.logger, UA_LOGCATEGORY_SECURITYPOLICY,
-                                     "PubSub receive. Faulty Nonce set");
-                    }
-                    UA_ByteString toBeDecrypted =
-                        {buffer.length - currentPosition - sigSize,
-                         buffer.data + currentPosition};
-                    rv = readerGroup->config.securityPolicy->symmetricModule.cryptoModule
-                        .encryptionAlgorithm.decrypt(channelContext, &toBeDecrypted);
-
-                    if (rv != UA_STATUSCODE_GOOD) {
-                        // TODO: decide what to do on decrypt fail
-                        UA_LOG_ERROR(&server->config.logger, UA_LOGCATEGORY_SECURITYPOLICY, 
-                                "PubSub receive. Faulty Decryption");
-                    }
-                }
-#endif
-                UA_NetworkMessage_decodePayload(&buffer, &currentPosition, &currentNetworkMessage);
-                UA_NetworkMessage_decodeFooters(&buffer, &currentPosition, &currentNetworkMessage);
-
-                // UA_NetworkMessage_decodeBinary(&buffer, &currentPosition, &currentNetworkMessage);
+                // UA_NetworkMessage_decodeBinary(&buffer, &currentPosition,
+                // &currentNetworkMessage);
                 /* TODO: We already know the ReaderGroup at this point. Now we loose that information.
                  * There is only one place where UA_PubSubConnection_processNetworkMessage is used. */
                 UA_PubSubConnection_processNetworkMessage(server, connection, &currentNetworkMessage);
@@ -1081,6 +1115,7 @@ void UA_ReaderGroup_subscribeCallback(UA_Server *server, UA_ReaderGroup *readerG
         }
     }
 }
+
 
 /* Add new subscribeCallback. The first execution is triggered directly after
  * creation. */
