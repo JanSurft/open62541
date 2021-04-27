@@ -890,14 +890,30 @@ UA_NetworkMessage_decodeFooters(const UA_ByteString *src, size_t *offset, UA_Net
     return UA_STATUSCODE_GOOD;
 }
 
-// UA_StatusCode
-// UA_NetworkMessage_decodeBinary(const UA_ByteString *src, size_t *offset,
-//                                UA_NetworkMessage* dst) {
-//     UA_StatusCode retval = UA_NetworkMessage_decodeBinaryInternal(src, offset, dst);
-//     if(retval != UA_STATUSCODE_GOOD)
-//         UA_NetworkMessage_clear(dst);
-//     return retval;
-// }
+static UA_StatusCode
+UA_NetworkMessage_decodeBinaryInternal(const UA_ByteString *src, size_t *offset,
+                                           UA_NetworkMessage* dst) {
+
+    UA_StatusCode retval = UA_NetworkMessage_decodeHeaders(src, offset, dst);
+    if (retval != UA_STATUSCODE_GOOD) return retval;
+
+    retval = UA_NetworkMessage_decodePayload(src, offset, dst);
+    if (retval != UA_STATUSCODE_GOOD) return retval;
+
+    retval = UA_NetworkMessage_decodeFooters(src, offset, dst);
+    if (retval != UA_STATUSCODE_GOOD) return retval;
+
+    return UA_STATUSCODE_GOOD;
+}
+
+UA_StatusCode
+UA_NetworkMessage_decodeBinary(const UA_ByteString *src, size_t *offset,
+                               UA_NetworkMessage* dst) {
+    UA_StatusCode retval = UA_NetworkMessage_decodeBinaryInternal(src, offset, dst);
+    if(retval != UA_STATUSCODE_GOOD)
+        UA_NetworkMessage_clear(dst);
+    return retval;
+}
 
 static UA_Boolean
 increaseOffsetArray(UA_NetworkMessageOffsetBuffer *offsetBuffer) {
