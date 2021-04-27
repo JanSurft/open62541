@@ -48,6 +48,10 @@ UA_StatusCode
 receiveNetworkMessage(const UA_Server *server, UA_ReaderGroup *readerGroup,
                       UA_ByteString *buffer, size_t *currentPosition,
                       UA_NetworkMessage *currentNetworkMessage);
+UA_StatusCode
+verifyAndDecrypt(const UA_Server *server, UA_ReaderGroup *readerGroup,
+                 UA_ByteString *buffer, const size_t *currentPosition,
+                 const UA_NetworkMessage *currentNetworkMessage, UA_StatusCode retval);
 static void
 UA_PubSubDSRDataSetField_sampleValue(UA_Server *server, UA_DataSetReader *dataSetReader,
                                      UA_DataValue *value, size_t fieldNumber) {
@@ -920,6 +924,24 @@ receiveNetworkMessage(const UA_Server *server, UA_ReaderGroup *readerGroup,
 
 #ifdef UA_ENABLE_PUBSUB_ENCRYPTION
 
+    retval = verifyAndDecrypt(server, readerGroup, buffer, currentPosition, currentNetworkMessage,
+                     retval);
+    if(retval != UA_STATUSCODE_GOOD) return retval;
+
+#endif
+    retval = UA_NetworkMessage_decodePayload(buffer, currentPosition, currentNetworkMessage);
+    if(retval != UA_STATUSCODE_GOOD) return retval;
+
+    retval = UA_NetworkMessage_decodeFooters(buffer, currentPosition, currentNetworkMessage);
+    if(retval != UA_STATUSCODE_GOOD) return retval;
+
+    return UA_STATUSCODE_GOOD;
+}
+
+UA_StatusCode
+verifyAndDecrypt(const UA_Server *server, UA_ReaderGroup *readerGroup,
+                 UA_ByteString *buffer, const size_t *currentPosition,
+                 const UA_NetworkMessage *currentNetworkMessage, UA_StatusCode retval) {
     void *channelContext = readerGroup->securityPolicyContext;
     size_t sigSize = 0;
 
@@ -971,16 +993,8 @@ receiveNetworkMessage(const UA_Server *server, UA_ReaderGroup *readerGroup,
             return retval;
         }
     }
-#endif
-    retval = UA_NetworkMessage_decodePayload(buffer, currentPosition, currentNetworkMessage);
-    if(retval != UA_STATUSCODE_GOOD) return retval;
-
-    retval = UA_NetworkMessage_decodeFooters(buffer, currentPosition, currentNetworkMessage);
-    if(retval != UA_STATUSCODE_GOOD) return retval;
-
     return UA_STATUSCODE_GOOD;
 }
-
 
 /* This callback triggers the collection and reception of NetworkMessages and the
  * contained DataSetMessages. */
