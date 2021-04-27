@@ -1029,13 +1029,26 @@ void UA_ReaderGroup_subscribeCallback(UA_Server *server, UA_ReaderGroup *readerG
                         // TODO: decide what to do on verify fail
                         UA_LOG_ERROR(&server->config.logger, UA_LOGCATEGORY_SECURITYPOLICY,
                                 "PubSub receive. Invalid Signature");
+                    } else {
+                        UA_LOG_DEBUG(&server->config.logger, UA_LOGCATEGORY_SECURITYPOLICY,
+                                     "PubSub receive. Signature Valid");
                     }
                 }
 
                 if (currentNetworkMessage.securityHeader.networkMessageEncrypted) {
 
-                    UA_ByteString toBeDecrypted = {buffer.length - currentPosition - sigSize, buffer.data + currentPosition};
-                    UA_StatusCode rv = readerGroup->config.securityPolicy->symmetricModule.cryptoModule 
+                    UA_StatusCode rv = readerGroup->config.securityPolicy
+                        ->setMessageNonce(channelContext,
+                                          &currentNetworkMessage.securityHeader.messageNonce);
+                    if (rv != UA_STATUSCODE_GOOD) {
+                        // TODO: decide what to do on nonce fail
+                        UA_LOG_ERROR(&server->config.logger, UA_LOGCATEGORY_SECURITYPOLICY,
+                                     "PubSub receive. Faulty Nonce set");
+                    }
+                    UA_ByteString toBeDecrypted =
+                        {buffer.length - currentPosition - sigSize,
+                         buffer.data + currentPosition};
+                    rv = readerGroup->config.securityPolicy->symmetricModule.cryptoModule
                         .encryptionAlgorithm.decrypt(channelContext, &toBeDecrypted);
 
                     if (rv != UA_STATUSCODE_GOOD) {
