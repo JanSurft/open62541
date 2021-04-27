@@ -2081,6 +2081,72 @@ sendBufferedNetworkMessage(UA_Server *server, UA_PubSubConnection *connection,
 }
 
 static UA_StatusCode
+verifyAndEncrypt(UA_WriterGroup *wg, const UA_NetworkMessage *nm,
+                 UA_Byte *networkMessageStart, UA_Byte *payloadStart,
+                 UA_Byte *footerEnd) {
+    UA_StatusCode retval;
+    void *channelContext = wg->securityPolicyContext;
+
+    if((*nm).securityHeader.networkMessageEncrypted) {
+        /* Set the temporary MessageNonce in the SecurityPolicy */
+        retval = wg->config.securityPolicy->setMessageNonce(channelContext, &(*nm).securityHeader.messageNonce);
+        if(retval != UA_STATUSCODE_GOOD) return retval;
+
+        /* The encryption is done in-place, no need to encode again */
+        UA_ByteString toBeEncrypted = {(uintptr_t)footerEnd - (uintptr_t)payloadStart,
+                                       payloadStart};
+        retval = wg->config.securityPolicy->symmetricModule.cryptoModule.encryptionAlgorithm
+            .encrypt(channelContext, &toBeEncrypted);
+
+        if(retval != UA_STATUSCODE_GOOD) return retval;
+    }
+
+    if((*nm).securityHeader.networkMessageSigned) {
+        UA_ByteString toBeSigned = {(uintptr_t)footerEnd - (uintptr_t)networkMessageStart,
+                                    networkMessageStart};
+
+        size_t sigSize = wg->config.securityPolicy->symmetricModule.cryptoModule.
+            signatureAlgorithm.getLocalSignatureSize(channelContext);
+        UA_ByteString signature = {sigSize, footerEnd};
+        retval = wg->config.securityPolicy->symmetricModule.cryptoModule.
+            signatureAlgorithm.sign(channelContext, &toBeSigned, &signature);
+
+        if(retval != UA_STATUSCODE_GOOD) return retval;
+    }
+    return UA_STATUSCODE_GOOD;
+}
+
+static UA_StatusCode
+writeNetworkMessage(UA_WriterGroup *wg, UA_StatusCode retval, size_t msgSize,
+                    UA_NetworkMessage *nm, UA_ByteString *buf) { /* Encode the message */
+    UA_Byte *bufPos = (*buf).data;
+    memset(bufPos, 0, msgSize);
+    UA_Byte *bufEnd = &(*buf).data[(*buf).length];
+
+    UA_Byte *networkMessageStart = bufPos;
+    retval = UA_NetworkMessage_encodeHeaders(nm, &bufPos, bufEnd);
+    if(retval != UA_STATUSCODE_GOOD) return retval;
+
+    UA_Byte *payloadStart = bufPos;
+    retval = UA_NetworkMessage_encodePayload(nm, &bufPos, bufEnd);
+    if(retval != UA_STATUSCODE_GOOD) return retval;
+    UA_Byte *payloadEnd = bufPos;
+
+    UA_Byte *footerStart = bufPos;
+    retval = UA_NetworkMessage_encodeFooters(nm, &bufPos, bufEnd);
+    if(retval != UA_STATUSCODE_GOOD) return retval;
+    UA_Byte *footerEnd = bufPos;
+
+    /* Encrypt and Sign the message */
+#ifdef UA_ENABLE_PUBSUB_ENCRYPTION
+
+    retval = verifyAndEncrypt(wg, nm, networkMessageStart, payloadStart, footerEnd);
+    if(retval != UA_STATUSCODE_GOOD) return retval;
+
+#endif
+    return UA_STATUSCODE_GOOD;
+}
+static UA_StatusCode
 sendNetworkMessage(UA_PubSubConnection *connection, UA_WriterGroup *wg,
                    UA_DataSetMessage *dsm, UA_UInt16 *writerIds, UA_Byte dsmCount,
                    UA_ExtensionObject *messageSettings,
@@ -2120,85 +2186,13 @@ sendNetworkMessage(UA_PubSubConnection *connection, UA_WriterGroup *wg,
         if(retval != UA_STATUSCODE_GOOD)
             goto cleanup;
     }
+    retval = writeNetworkMessage(wg, retval, msgSize, &nm, &buf);
 
-    /* Encode the message */
-    UA_Byte *bufPos = buf.data;
-    memset(bufPos, 0, msgSize);
-    UA_Byte *bufEnd = &buf.data[buf.length];
-    UA_Byte *encryptStart = NULL;
-
-    UA_Byte *networkMessageStart = bufPos;
-    retval = UA_NetworkMessage_encodeHeaders(&nm, &bufPos, bufEnd);
-    if(retval != UA_STATUSCODE_GOOD) {
+    if (retval != UA_STATUSCODE_GOOD) {
         if(msgSize > UA_MAX_STACKBUF)
             UA_ByteString_clear(&buf);
         goto cleanup;
     }
-
-    UA_Byte *payloadStart = bufPos;
-    retval = UA_NetworkMessage_encodePayload(&nm, &bufPos, bufEnd);
-    if(retval != UA_STATUSCODE_GOOD) {
-        if(msgSize > UA_MAX_STACKBUF)
-            UA_ByteString_clear(&buf);
-        goto cleanup;
-    }
-    UA_Byte *payloadEnd = bufPos;
-
-    UA_Byte *footerStart = bufPos;
-    retval = UA_NetworkMessage_encodeFooters(&nm, &bufPos, bufEnd);
-    if(retval != UA_STATUSCODE_GOOD) {
-        if(msgSize > UA_MAX_STACKBUF)
-            UA_ByteString_clear(&buf);
-        goto cleanup;
-    }
-    UA_Byte *footerEnd = bufPos;
-
-    /* Encrypt and Sign the message */
-#ifdef UA_ENABLE_PUBSUB_ENCRYPTION
-
-    void *channelContext = wg->securityPolicyContext;
-
-    if(nm.securityHeader.networkMessageEncrypted) {
-        /* Set the temporary MessageNonce in the SecurityPolicy */
-        retval = wg->config.securityPolicy->setMessageNonce(channelContext, &nm.securityHeader.messageNonce);
-        if(retval != UA_STATUSCODE_GOOD) {
-            if(msgSize > UA_MAX_STACKBUF)
-                UA_ByteString_clear(&buf);
-            goto cleanup;
-        }
-
-        /* The encryption is done in-place, no need to encode again */
-        UA_ByteString toBeEncrypted = {(uintptr_t)footerEnd - (uintptr_t)payloadStart,
-                                       payloadStart};
-        retval = wg->config.securityPolicy->symmetricModule.cryptoModule.encryptionAlgorithm
-            .encrypt(channelContext, &toBeEncrypted);
-
-        if(retval != UA_STATUSCODE_GOOD) {
-            if(msgSize > UA_MAX_STACKBUF)
-                UA_ByteString_clear(&buf);
-            goto cleanup;
-        }
-    }
-
-    if(nm.securityHeader.networkMessageSigned) {
-        UA_ByteString toBeSigned = {(uintptr_t)footerEnd - (uintptr_t)networkMessageStart,
-                                    networkMessageStart};
-
-        size_t sigSize = wg->config.securityPolicy->symmetricModule.cryptoModule.
-            signatureAlgorithm.getLocalSignatureSize(channelContext);
-        UA_ByteString signature = {sigSize, footerEnd};
-        retval = wg->config.securityPolicy->symmetricModule.cryptoModule.
-            signatureAlgorithm.sign(channelContext, &toBeSigned, &signature);
-
-        if(retval != UA_STATUSCODE_GOOD) {
-            if(msgSize > UA_MAX_STACKBUF)
-                UA_ByteString_clear(&buf);
-            goto cleanup;
-        }
-    }
-
-
-#endif
 
     /* Send the prepared messages */
     retval = connection->channel->send(connection->channel, transportSettings, &buf);

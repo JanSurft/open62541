@@ -45,7 +45,7 @@ static void
 UA_DataSetReader_clear(UA_Server *server, UA_DataSetReader *dataSetReader);
 
 UA_StatusCode
-receiveNetworkMessage(const UA_Server *server, UA_ReaderGroup *readerGroup,
+readNetworkMessage(const UA_Server *server, UA_ReaderGroup *readerGroup,
                       UA_ByteString *buffer, size_t *currentPosition,
                       UA_NetworkMessage *currentNetworkMessage);
 UA_StatusCode
@@ -915,7 +915,7 @@ static void UA_DataSetMessage_freeDecodedPayload(UA_DataSetMessage *dsm) {
 }
 
 UA_StatusCode
-receiveNetworkMessage(const UA_Server *server, UA_ReaderGroup *readerGroup,
+readNetworkMessage(const UA_Server *server, UA_ReaderGroup *readerGroup,
                       UA_ByteString *buffer, size_t *currentPosition,
                       UA_NetworkMessage *currentNetworkMessage) {
 
@@ -1098,8 +1098,9 @@ void UA_ReaderGroup_subscribeCallback(UA_Server *server, UA_ReaderGroup *readerG
                 UA_NetworkMessage currentNetworkMessage;
                 memset(&currentNetworkMessage, 0, sizeof(UA_NetworkMessage));
 
-                UA_StatusCode retval = receiveNetworkMessage(server, readerGroup, &buffer, &currentPosition,
-                                      &currentNetworkMessage);
+                UA_StatusCode retval =
+                    readNetworkMessage(server, readerGroup, &buffer, &currentPosition,
+                                       &currentNetworkMessage);
 
                 if (UA_StatusCode_isBad(retval)) {
                     UA_LOG_ERROR(&server->config.logger, UA_LOGCATEGORY_SERVER,
