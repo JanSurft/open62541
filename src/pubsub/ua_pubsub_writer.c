@@ -2081,7 +2081,7 @@ sendBufferedNetworkMessage(UA_Server *server, UA_PubSubConnection *connection,
 }
 
 static UA_StatusCode
-verifyAndEncrypt(UA_WriterGroup *wg, const UA_NetworkMessage *nm,
+encryptAndSign(UA_WriterGroup *wg, const UA_NetworkMessage *nm,
                  UA_Byte *networkMessageStart, UA_Byte *payloadStart,
                  UA_Byte *footerEnd) {
     UA_StatusCode retval;
@@ -2140,7 +2140,7 @@ writeNetworkMessage(UA_WriterGroup *wg, UA_StatusCode retval, size_t msgSize,
     /* Encrypt and Sign the message */
 #ifdef UA_ENABLE_PUBSUB_ENCRYPTION
 
-    retval = verifyAndEncrypt(wg, nm, networkMessageStart, payloadStart, footerEnd);
+    retval = encryptAndSign(wg, nm, networkMessageStart, payloadStart, footerEnd);
     if(retval != UA_STATUSCODE_GOOD) return retval;
 
 #endif
