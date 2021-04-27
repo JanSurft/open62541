@@ -1057,9 +1057,6 @@ void UA_ReaderGroup_subscribeCallback(UA_Server *server, UA_ReaderGroup *readerG
                                 "PubSub receive. Faulty Decryption");
                     }
                 }
-
-                // UA_NetworkMessage_decrypt(&buffer, &currentPosition, &currentNetworkMessage);
-
 #endif
                 UA_NetworkMessage_decodePayload(&buffer, &currentPosition, &currentNetworkMessage);
                 UA_NetworkMessage_decodeFooters(&buffer, &currentPosition, &currentNetworkMessage);
