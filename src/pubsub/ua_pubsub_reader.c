@@ -48,10 +48,7 @@ UA_StatusCode
 readNetworkMessage(const UA_Server *server, UA_ReaderGroup *readerGroup,
                       UA_ByteString *buffer, size_t *currentPosition,
                       UA_NetworkMessage *currentNetworkMessage);
-UA_StatusCode
-verifyAndDecrypt(const UA_Server *server, UA_ReaderGroup *readerGroup,
-                 UA_ByteString *buffer, const size_t *currentPosition,
-                 const UA_NetworkMessage *currentNetworkMessage, UA_StatusCode retval);
+
 static void
 UA_PubSubDSRDataSetField_sampleValue(UA_Server *server, UA_DataSetReader *dataSetReader,
                                      UA_DataValue *value, size_t fieldNumber) {
@@ -914,221 +911,362 @@ static void UA_DataSetMessage_freeDecodedPayload(UA_DataSetMessage *dsm) {
     }
 }
 
+static
+UA_StatusCode
+needsDecryption(const UA_Logger *logger,
+                const UA_NetworkMessage *networkMessage,
+                const UA_ReaderGroup *readerGroup,
+                UA_Boolean *doDecrypt) {
+
+    UA_Boolean isEncrypted = networkMessage->securityHeader.networkMessageEncrypted;
+    UA_Boolean requiresEncryption = readerGroup->config.securityMode > UA_MESSAGESECURITYMODE_SIGN;
+
+    UA_StatusCode retval = UA_STATUSCODE_GOOD;
+
+    if(isEncrypted && requiresEncryption) {
+        *doDecrypt = UA_TRUE;
+    } else if(!isEncrypted && !requiresEncryption) {
+        *doDecrypt = UA_FALSE;
+    } else {
+        if(isEncrypted) {
+            UA_LOG_ERROR(logger, UA_LOGCATEGORY_SECURITYPOLICY,
+                         "PubSub receive. "
+                         "Message is encrypted but ReaderGroup does not expect encryption");
+            retval = UA_STATUSCODE_BADSECURITYMODEINSUFFICIENT;
+        } else {
+            UA_LOG_ERROR(logger, UA_LOGCATEGORY_SECURITYPOLICY,
+                         "PubSub receive. "
+                         "Message is not encrypted but ReaderGroup requires encryption");
+            retval = UA_STATUSCODE_BADSECURITYMODEREJECTED;
+        }
+    }
+    return retval;
+}
+
+static
+UA_StatusCode
+needsValidation(const UA_Logger *logger,
+                    const UA_NetworkMessage *networkMessage,
+                    const UA_ReaderGroup *readerGroup,
+                    UA_Boolean *doValidate) {
+
+    UA_Boolean isSigned = networkMessage->securityHeader.networkMessageSigned;
+    UA_Boolean requiresSignature = readerGroup->config.securityMode > UA_MESSAGESECURITYMODE_NONE;
+
+    UA_StatusCode retval = UA_STATUSCODE_GOOD;
+
+    if(isSigned &&
+       requiresSignature) {
+        *doValidate = UA_TRUE;
+    } else if(!isSigned && !requiresSignature) {
+        *doValidate = UA_FALSE;
+    } else {
+
+        if(isSigned) {
+            UA_LOG_ERROR(logger, UA_LOGCATEGORY_SECURITYPOLICY,
+                         "PubSub receive. "
+                         "Message is signed but ReaderGroup does not expect signatures");
+            retval = UA_STATUSCODE_BADSECURITYMODEINSUFFICIENT;
+        } else {
+            UA_LOG_ERROR(logger, UA_LOGCATEGORY_SECURITYPOLICY,
+                         "PubSub receive. "
+                         "Message is not signed but ReaderGroup requires signature");
+            retval = UA_STATUSCODE_BADSECURITYMODEREJECTED;
+        }
+    }
+    return retval;
+}
+
+static
+UA_StatusCode
+verifyAndDecrypt(const UA_Server *server, UA_ReaderGroup *readerGroup,
+                 UA_ByteString *buffer, const size_t *currentPosition,
+                 const UA_NetworkMessage *currentNetworkMessage) {
+    void *channelContext = readerGroup->securityPolicyContext;
+    size_t sigSize = 0;
+    UA_StatusCode retval = UA_STATUSCODE_GOOD;
+
+    const UA_Logger* logger = &server->config.logger;
+    UA_Boolean doValidate = false;
+    UA_Boolean doDecrypt= false;
+
+    retval = needsValidation(logger, currentNetworkMessage, readerGroup, &doValidate);
+    UA_CHECK_ERROR(retval, logger, UA_LOGCATEGORY_SECURITYPOLICY,
+                   "PubSub receive. Validation security mode error");
+
+    retval = needsDecryption(logger, currentNetworkMessage, readerGroup, &doDecrypt);
+    UA_CHECK_ERROR(retval, logger, UA_LOGCATEGORY_SECURITYPOLICY
+                   ,"PubSub receive. Decryption security mode error");
+
+
+    if (doValidate) {
+        sigSize = readerGroup->config.securityPolicy->symmetricModule
+            .cryptoModule.signatureAlgorithm.getLocalSignatureSize(channelContext);
+
+        UA_ByteString toBeVerified = {buffer->length - sigSize, buffer->data};
+        UA_ByteString signature = {sigSize, buffer->data + buffer->length - sigSize};
+
+        retval = readerGroup->config.securityPolicy->symmetricModule.cryptoModule
+            .signatureAlgorithm.verify(channelContext, &toBeVerified, &signature);
+        UA_CHECK_ERROR(retval, logger, UA_LOGCATEGORY_SECURITYPOLICY,
+                       "PubSub receive. Signature invalid");
+
+        UA_LOG_DEBUG(logger, UA_LOGCATEGORY_SECURITYPOLICY,
+                         "PubSub receive. Signature valid");
+        buffer->length -= sigSize;
+    }
+
+    if (doDecrypt) {
+
+        retval = readerGroup->config.securityPolicy
+            ->setMessageNonce(channelContext,
+                              &currentNetworkMessage->securityHeader.messageNonce);
+        UA_CHECK_ERROR(retval, logger, UA_LOGCATEGORY_SECURITYPOLICY,
+                       "PubSub receive. Faulty Nonce set");
+
+        UA_ByteString toBeDecrypted =
+            {buffer->length - *currentPosition,
+             buffer->data + *currentPosition};
+        retval = readerGroup->config.securityPolicy->symmetricModule.cryptoModule
+            .encryptionAlgorithm.decrypt(channelContext, &toBeDecrypted);
+
+        UA_CHECK_ERROR(retval, logger, UA_LOGCATEGORY_SECURITYPOLICY,
+                     "PubSub receive. Faulty Decryption")
+    }
+    return UA_STATUSCODE_GOOD;
+error:
+    return retval;
+}
+
 UA_StatusCode
 readNetworkMessage(const UA_Server *server, UA_ReaderGroup *readerGroup,
                       UA_ByteString *buffer, size_t *currentPosition,
                       UA_NetworkMessage *currentNetworkMessage) {
 
-    UA_StatusCode retval = UA_NetworkMessage_decodeHeaders(buffer, currentPosition, currentNetworkMessage);
-    if(retval != UA_STATUSCODE_GOOD) return retval;
+    const UA_Logger *logger = &server->config.logger;
+
+    UA_StatusCode res = UA_NetworkMessage_decodeHeaders(buffer, currentPosition, currentNetworkMessage);
+    UA_CHECK_ERROR(res, logger, UA_LOGCATEGORY_SERVER, "PubSub receive. decoding headers failed");
 
 #ifdef UA_ENABLE_PUBSUB_ENCRYPTION
-
-    retval = verifyAndDecrypt(server, readerGroup, buffer, currentPosition, currentNetworkMessage,
-                     retval);
-    if(retval != UA_STATUSCODE_GOOD) return retval;
-
+    res = verifyAndDecrypt(server, readerGroup, buffer, currentPosition, currentNetworkMessage);
+    UA_CHECK_ERROR(res, logger, UA_LOGCATEGORY_SERVER, "PubSub receive. verify and decrypt failed");
 #endif
-    retval = UA_NetworkMessage_decodePayload(buffer, currentPosition, currentNetworkMessage);
-    if(retval != UA_STATUSCODE_GOOD) return retval;
 
-    retval = UA_NetworkMessage_decodeFooters(buffer, currentPosition, currentNetworkMessage);
-    if(retval != UA_STATUSCODE_GOOD) return retval;
+    res = UA_NetworkMessage_decodePayload(buffer, currentPosition, currentNetworkMessage);
+    UA_CHECK_ERROR(res, logger, UA_LOGCATEGORY_SERVER, "PubSub receive. decoding payload failed");
+
+    res = UA_NetworkMessage_decodeFooters(buffer, currentPosition, currentNetworkMessage);
+    UA_CHECK_ERROR(res, logger, UA_LOGCATEGORY_SERVER, "PubSub receive. decoding footers failed");
 
     return UA_STATUSCODE_GOOD;
+error:
+    return res;
 }
 
+static
 UA_StatusCode
-verifyAndDecrypt(const UA_Server *server, UA_ReaderGroup *readerGroup,
-                 UA_ByteString *buffer, const size_t *currentPosition,
-                 const UA_NetworkMessage *currentNetworkMessage, UA_StatusCode retval) {
-    void *channelContext = readerGroup->securityPolicyContext;
-    size_t sigSize = 0;
+receiveNetworkMessage(UA_Server *server, UA_ReaderGroup *readerGroup,
+                      UA_PubSubConnection *connection, size_t previousPosition,
+                      UA_ByteString *buffer, size_t *currentPosition) {
+    size_t paddingBytes = 0;
+    UA_NetworkMessage currentNetworkMessage;
+    memset(&currentNetworkMessage, 0, sizeof(UA_NetworkMessage));
 
-    if ((*currentNetworkMessage).securityHeader.networkMessageSigned) {
+    UA_StatusCode res =
+        readNetworkMessage(server, readerGroup, buffer,
+                           currentPosition, &currentNetworkMessage);
 
-        sigSize = readerGroup->config.securityPolicy->symmetricModule
-            .cryptoModule.signatureAlgorithm.getLocalSignatureSize(channelContext);
+    UA_CHECK_ERROR(res, &server->config.logger, UA_LOGCATEGORY_SERVER,
+                   "Subscribe failed. receive network message failed.");
 
-        UA_ByteString toBeVerified = {(*buffer).length - sigSize, (*buffer).data};
-        UA_ByteString signature = {sigSize, (*buffer).data + (*buffer).length - sigSize};
+    /* TODO: We already know the ReaderGroup at this point. Now we loose that
+    * information. There is only one place where
+    * UA_PubSubConnection_processNetworkMessage is used. */
+    res = UA_PubSubConnection_processNetworkMessage(server, connection, &currentNetworkMessage);
+    UA_CHECK_ERROR(res, &server->config.logger, UA_LOGCATEGORY_SERVER,
+                   "Subscribe failed. process network message failed.");
+    UA_NetworkMessage_clear(&currentNetworkMessage);
 
-        retval = readerGroup->config.securityPolicy->symmetricModule.cryptoModule
-            .signatureAlgorithm.verify(channelContext, &toBeVerified, &signature);
+    /* Minimum ethernet packet size is 64 bytes where the header size is 14
+     * bytes and FCS size is 4 bytes so remaining minimum payload size of
+     * ethernet packet is 46 bytes */
+    /* TODO: Need to handle padding bytes for UDP */
+    if ((((*currentPosition) - previousPosition) < MIN_PAYLOAD_SIZE_ETHERNET) &&
+        (strncmp((const char *)connection->config->transportProfileUri.data, "http://opcfoundation.org/UA-Profile/Transport/pubsub-eth-uadp", (size_t)(connection->config->transportProfileUri.length)) == 0)) {
+        paddingBytes = (MIN_PAYLOAD_SIZE_ETHERNET - ((*currentPosition) - previousPosition));
+        (*currentPosition) += paddingBytes; /* During multiple receive, move the position to
+                             handle padding bytes */
+    }
+    previousPosition = (*currentPosition);
+    return UA_STATUSCODE_GOOD;
 
-        if (retval != UA_STATUSCODE_GOOD) {
-            // TODO: decide what to do on verify fail
-            UA_LOG_ERROR(&server->config.logger, UA_LOGCATEGORY_SECURITYPOLICY,
-                         "PubSub receive. Invalid Signature");
-            return retval;
-        } else {
-            UA_LOG_DEBUG(&server->config.logger, UA_LOGCATEGORY_SECURITYPOLICY,
-                         "PubSub receive. Signature Valid");
-        }
+error:
+    UA_NetworkMessage_clear(&currentNetworkMessage);
+    return res;
+}
 
-        buffer->length -= sigSize;
+static
+UA_StatusCode
+receiveNetworkMessageRT(UA_Server *server, UA_ReaderGroup *readerGroup,
+                        UA_PubSubConnection *connection, size_t previousPosition,
+                        UA_ByteString *buffer, size_t *currentPosition) {
+#ifdef UA_ENABLE_PUBSUB_BUFMALLOC
+    useMembufAlloc();
+#endif /* UA_ENABLE_PUBSUB_BUFMALLOC */
+
+    /* Considering max DSM as 1
+* TODO:
+* Process with the static value source
+*/
+    size_t paddingBytes = 0;
+    UA_DataSetReader *dataSetReader = LIST_FIRST(&readerGroup->readers);
+    /* Decode only the necessary offset and update the networkMessage */
+    if(UA_NetworkMessage_updateBufferedNwMessage(&dataSetReader->bufferedMessage, buffer,
+                                                 currentPosition) != UA_STATUSCODE_GOOD) {
+        UA_LOG_INFO(&server->config.logger, UA_LOGCATEGORY_SERVER,
+                    "PubSub receive. Unknown field type.");
+        UA_DataSetMessage_freeDecodedPayload(dataSetReader->bufferedMessage.nm->payload.dataSetPayload.dataSetMessages);
+#ifdef UA_ENABLE_PUBSUB_BUFMALLOC
+        useNormalAlloc();
+#endif /* UA_ENABLE_PUBSUB_BUFMALLOC */
+        return UA_STATUSCODE_UNCERTAIN;
     }
 
-    if ((*currentNetworkMessage).securityHeader.networkMessageEncrypted) {
-
-        retval = readerGroup->config.securityPolicy
-            ->setMessageNonce(channelContext,
-                              &(*currentNetworkMessage).securityHeader.messageNonce);
-        if (retval != UA_STATUSCODE_GOOD) {
-            // TODO: decide what to do on nonce fail
-            UA_LOG_ERROR(&server->config.logger, UA_LOGCATEGORY_SECURITYPOLICY,
-                         "PubSub receive. Faulty Nonce set");
-            return retval;
-        }
-        UA_ByteString toBeDecrypted =
-            {(*buffer).length - (*currentPosition),
-             (*buffer).data + (*currentPosition)};
-        retval = readerGroup->config.securityPolicy->symmetricModule.cryptoModule
-            .encryptionAlgorithm.decrypt(channelContext, &toBeDecrypted);
-
-        if (retval != UA_STATUSCODE_GOOD) {
-            // TODO: decide what to do on decrypt fail
-            UA_LOG_ERROR(&server->config.logger, UA_LOGCATEGORY_SECURITYPOLICY,
-                         "PubSub receive. Faulty Decryption");
-            return retval;
-        }
+    /* Check the decoded message is the expected one
+     * TODO: PublisherID check after modification in NM to support all datatypes */
+    if((dataSetReader->bufferedMessage.nm->groupHeader.writerGroupId !=
+        dataSetReader->config.writerGroupId) ||
+       (*dataSetReader->bufferedMessage.nm->payloadHeader.dataSetPayloadHeader
+             .dataSetWriterIds != dataSetReader->config.dataSetWriterId)) {
+        UA_LOG_INFO(&server->config.logger, UA_LOGCATEGORY_SERVER,
+                    "PubSub receive. Unknown message received. Will not be processed.");
+        UA_DataSetMessage_freeDecodedPayload(
+            dataSetReader->bufferedMessage.nm->payload.dataSetPayload.dataSetMessages);
+#ifdef UA_ENABLE_PUBSUB_BUFMALLOC
+        useNormalAlloc();
+#endif /* UA_ENABLE_PUBSUB_BUFMALLOC */
+        return UA_STATUSCODE_UNCERTAIN;
     }
+
+    UA_DataSetReader_process(
+        server, dataSetReader,
+        dataSetReader->bufferedMessage.nm->payload.dataSetPayload.dataSetMessages);
+
+    UA_DataSetMessage_freeDecodedPayload(
+        dataSetReader->bufferedMessage.nm->payload.dataSetPayload.dataSetMessages);
+
+#ifdef UA_ENABLE_PUBSUB_BUFMALLOC
+    useNormalAlloc();
+#endif /* UA_ENABLE_PUBSUB_BUFMALLOC */
+
+    /* Minimum ethernet packet size is 64 bytes where the header size is 14
+     * bytes and FCS size is 4 bytes so remaining minimum payload size of
+     * ethernet packet is 46 bytes */
+    /* TODO: Need to handle padding bytes for UDP */
+    if(((*currentPosition - previousPosition) < MIN_PAYLOAD_SIZE_ETHERNET) &&
+       (strncmp((const char *)connection->config->transportProfileUri.data,
+                "http://opcfoundation.org/UA-Profile/Transport/pubsub-eth-uadp",
+                (size_t)(connection->config->transportProfileUri.length)) == 0)) {
+        paddingBytes =
+            (MIN_PAYLOAD_SIZE_ETHERNET - ((*currentPosition) - previousPosition));
+        (*currentPosition) += paddingBytes; /* During multiple receive, move the position
+                                               to handle padding bytes */
+    }
+
+    previousPosition = *currentPosition;
+
     return UA_STATUSCODE_GOOD;
 }
 
+static UA_StatusCode
+receiveNetworkMessageWithFunc(
+    UA_Server *server, UA_ReaderGroup *readerGroup,
+    UA_PubSubConnection *connection, UA_ByteString *buffer, size_t *currentPosition,
+    size_t previousPosition,
+    UA_StatusCode (*receiveNetworkMessageFunc)(UA_Server *, UA_ReaderGroup *,
+                                               UA_PubSubConnection *, size_t,
+                                               UA_ByteString *, size_t *)) {
+    UA_StatusCode res;
+
+    do {
+        res = receiveNetworkMessageFunc(server, readerGroup, connection, previousPosition, buffer, currentPosition);
+        UA_CHECK_ERROR(res, &server->config.logger, UA_LOGCATEGORY_SERVER, "SubscribeCallback(): receive message failed");
+
+    } while(((*buffer).length) > (*currentPosition));
+    return UA_STATUSCODE_GOOD;
+error:
+    return res;
+}
+static
+UA_StatusCode
+receiveBufferedData(UA_Server *server, UA_ReaderGroup *readerGroup,
+                    UA_PubSubConnection *connection) {
+    UA_ByteString buffer;
+    buffer.length = RECEIVE_MSG_BUFFER_SIZE;
+    buffer.data = ReceiveMsgBuffer;
+    UA_StatusCode res = connection->channel->receive(connection->channel, &buffer, NULL, readerGroup->config.timeout);
+    UA_CHECK_ERROR(res, &server->config.logger, UA_LOGCATEGORY_SERVER,
+                   "SubscribeCallback(): Connection receive failed!");
+
+    if (buffer.length == 0) {
+        return UA_STATUSCODE_GOOD;
+    }
+
+    size_t currentPosition = 0;
+    size_t previousPosition = 0;
+
+    if(readerGroup->config.rtLevel == UA_PUBSUB_RT_FIXED_SIZE) {
+
+        if(readerGroup->config.securityMode > UA_MESSAGESECURITYMODE_NONE) {
+            // TODO: maybe make this possible in future
+            UA_LOG_ERROR(&server->config.logger, UA_LOGCATEGORY_SERVER,
+                         "Security mode for RT not valid");
+            goto error;
+        }
+        res = receiveNetworkMessageWithFunc(server, readerGroup, connection, &buffer,
+                                            &currentPosition, previousPosition,
+                                            &receiveNetworkMessageRT);
+        UA_CHECK_ERROR(res, &server->config.logger, UA_LOGCATEGORY_SERVER,
+                       "receive RT message failed")
+
+    } else {
+        res = receiveNetworkMessageWithFunc(server, readerGroup, connection, &buffer,
+                                            &currentPosition, previousPosition,
+                                            &receiveNetworkMessage);
+        UA_CHECK_ERROR(res, &server->config.logger, UA_LOGCATEGORY_SERVER,
+                       "receive message failed")
+    }
+
+    UA_ByteString_clear(&buffer);
+    return UA_STATUSCODE_GOOD;
+
+error:
+    UA_ByteString_clear(&buffer);
+    return res;
+}
 /* This callback triggers the collection and reception of NetworkMessages and the
  * contained DataSetMessages. */
 void UA_ReaderGroup_subscribeCallback(UA_Server *server, UA_ReaderGroup *readerGroup) {
 
-    UA_LOG_DEBUG(&server->config.logger, UA_LOGCATEGORY_SERVER, "PubSub subscribe callback");
+    UA_assert(server);
+    UA_assert(readerGroup);
 
-    if(!readerGroup) {
-        UA_LOG_ERROR(&server->config.logger, UA_LOGCATEGORY_SERVER,
-            "Subscribe failed. ReaderGroup not found");
-        return;
-    }
+    UA_LOG_DEBUG(&server->config.logger, UA_LOGCATEGORY_SERVER, "PubSub subscribe callback");
 
     UA_PubSubConnection *connection =
         UA_PubSubConnection_findConnectionbyId(server, readerGroup->linkedConnection);
     if (!connection) {
         UA_LOG_ERROR(&server->config.logger, UA_LOGCATEGORY_SERVER, "SubscribeCallback(): "
             "Find linked connection failed");
-        UA_ReaderGroup_setPubSubState(server, UA_PUBSUBSTATE_ERROR, readerGroup);
-        return;
+        goto error;
     }
 
-    UA_ByteString buffer;
-    buffer.length = RECEIVE_MSG_BUFFER_SIZE;
-    buffer.data = ReceiveMsgBuffer;
-    UA_StatusCode res = connection->channel->receive(connection->channel, &buffer, NULL, readerGroup->config.timeout);
-    if (UA_StatusCode_isBad(res)) {
-        UA_LOG_ERROR(&server->config.logger, UA_LOGCATEGORY_SERVER, "SubscribeCallback(): Connection receive failed!");
-        UA_ReaderGroup_setPubSubState(server, UA_PUBSUBSTATE_ERROR, readerGroup);
-        UA_ByteString_clear(&buffer);
-        return;
-    }
-
-    if(buffer.length > 0) {
-        size_t currentPosition = 0;
-        size_t previousPosition = 0;
-        if (readerGroup->config.rtLevel == UA_PUBSUB_RT_FIXED_SIZE) {
-            do {
-#ifdef UA_ENABLE_PUBSUB_BUFMALLOC
-                useMembufAlloc();
-#endif /* UA_ENABLE_PUBSUB_BUFMALLOC */
-
-                /* Considering max DSM as 1
-                * TODO:
-                * Process with the static value source
-                */
-                size_t paddingBytes = 0;
-                UA_DataSetReader *dataSetReader = LIST_FIRST(&readerGroup->readers);
-                /* Decode only the necessary offset and update the networkMessage */
-                if(UA_NetworkMessage_updateBufferedNwMessage(&dataSetReader->bufferedMessage, &buffer, &currentPosition) != UA_STATUSCODE_GOOD) {
-                    UA_LOG_INFO(&server->config.logger, UA_LOGCATEGORY_SERVER,
-                                "PubSub receive. Unknown field type.");
-                    UA_DataSetMessage_freeDecodedPayload(dataSetReader->bufferedMessage.nm->payload.dataSetPayload.dataSetMessages);
-#ifdef UA_ENABLE_PUBSUB_BUFMALLOC
-                    useNormalAlloc();
-#endif /* UA_ENABLE_PUBSUB_BUFMALLOC */
-                    return;
-                }
-
-                /* Check the decoded message is the expected one
-                 * TODO: PublisherID check after modification in NM to support all datatypes */
-                if((dataSetReader->bufferedMessage.nm->groupHeader.writerGroupId != dataSetReader->config.writerGroupId) ||
-                   (*dataSetReader->bufferedMessage.nm->payloadHeader.dataSetPayloadHeader.dataSetWriterIds != dataSetReader->config.dataSetWriterId)) {
-                    UA_LOG_INFO(&server->config.logger, UA_LOGCATEGORY_SERVER,
-                                "PubSub receive. Unknown message received. Will not be processed.");
-                    UA_DataSetMessage_freeDecodedPayload(dataSetReader->bufferedMessage.nm->payload.dataSetPayload.dataSetMessages);
-#ifdef UA_ENABLE_PUBSUB_BUFMALLOC
-                    useNormalAlloc();
-#endif /* UA_ENABLE_PUBSUB_BUFMALLOC */
-                    return;
-                }
-
-                UA_DataSetReader_process(server, dataSetReader,
-                                         dataSetReader->bufferedMessage.nm->payload.dataSetPayload.dataSetMessages);
-
-                UA_DataSetMessage_freeDecodedPayload(dataSetReader->bufferedMessage.nm->payload.dataSetPayload.dataSetMessages);
-
-#ifdef UA_ENABLE_PUBSUB_BUFMALLOC
-                useNormalAlloc();
-#endif /* UA_ENABLE_PUBSUB_BUFMALLOC */
-
-                /* Minimum ethernet packet size is 64 bytes where the header size is 14 bytes and FCS size is 4 bytes
-                 * so remaining minimum payload size of ethernet packet is 46 bytes */
-                /* TODO: Need to handle padding bytes for UDP */
-                if (((currentPosition - previousPosition) < MIN_PAYLOAD_SIZE_ETHERNET) &&
-                    (strncmp((const char *)connection->config->transportProfileUri.data, "http://opcfoundation.org/UA-Profile/Transport/pubsub-eth-uadp", (size_t)(connection->config->transportProfileUri.length)) == 0)) {
-                    paddingBytes = (MIN_PAYLOAD_SIZE_ETHERNET - (currentPosition - previousPosition));
-                    currentPosition += paddingBytes; /* During multiple receive, move the position to handle padding bytes */
-                }
-
-                previousPosition = currentPosition;
-            } while((buffer.length) > currentPosition);
-
-            return;
-
-        } else {
-            UA_LOG_DEBUG(&server->config.logger, UA_LOGCATEGORY_USERLAND, "Message received:");
-            do {
-
-                size_t paddingBytes = 0;
-                UA_NetworkMessage currentNetworkMessage;
-                memset(&currentNetworkMessage, 0, sizeof(UA_NetworkMessage));
-
-                UA_StatusCode retval =
-                    readNetworkMessage(server, readerGroup, &buffer, &currentPosition,
-                                       &currentNetworkMessage);
-
-                if (UA_StatusCode_isBad(retval)) {
-                    UA_LOG_ERROR(&server->config.logger, UA_LOGCATEGORY_SERVER,
-                                 "Subscribe failed. receive network message failed.");
-                    UA_NetworkMessage_clear(&currentNetworkMessage);
-                    return;
-                }
-
-                // UA_NetworkMessage_decodeBinary(&buffer, &currentPosition,
-                // &currentNetworkMessage);
-                /* TODO: We already know the ReaderGroup at this point. Now we loose that information.
-                 * There is only one place where UA_PubSubConnection_processNetworkMessage is used. */
-                UA_PubSubConnection_processNetworkMessage(server, connection, &currentNetworkMessage);
-                UA_NetworkMessage_clear(&currentNetworkMessage);
-
-                /* Minimum ethernet packet size is 64 bytes where the header size is 14 bytes and FCS size is 4 bytes
-                 * so remaining minimum payload size of ethernet packet is 46 bytes */
-                /* TODO: Need to handle padding bytes for UDP */
-                if (((currentPosition - previousPosition) < MIN_PAYLOAD_SIZE_ETHERNET) &&
-                    (strncmp((const char *)connection->config->transportProfileUri.data, "http://opcfoundation.org/UA-Profile/Transport/pubsub-eth-uadp", (size_t)(connection->config->transportProfileUri.length)) == 0)) {
-                    paddingBytes = (MIN_PAYLOAD_SIZE_ETHERNET - (currentPosition - previousPosition));
-                    currentPosition += paddingBytes; /* During multiple receive, move the position to handle padding bytes */
-                }
-
-                previousPosition = currentPosition;
-            } while((buffer.length) > currentPosition);
-        }
-    }
+    UA_StatusCode res = receiveBufferedData(server, readerGroup, connection);
+    UA_CHECK_ERROR(res, &server->config.logger, UA_LOGCATEGORY_SERVER,
+                   "receive buffered data failed");
+error:
+    UA_ReaderGroup_setPubSubState(server, UA_PUBSUBSTATE_ERROR, readerGroup);
 }
 
 
@@ -1136,9 +1274,9 @@ void UA_ReaderGroup_subscribeCallback(UA_Server *server, UA_ReaderGroup *readerG
  * creation. */
 UA_StatusCode
 UA_ReaderGroup_addSubscribeCallback(UA_Server *server, UA_ReaderGroup *readerGroup) {
-    UA_StatusCode retval = UA_STATUSCODE_GOOD;
+    UA_StatusCode res = UA_STATUSCODE_GOOD;
     if(readerGroup->config.pubsubManagerCallback.addCustomCallback)
-        retval |= readerGroup->config.pubsubManagerCallback.addCustomCallback(server, readerGroup->identifier,
+        res |= readerGroup->config.pubsubManagerCallback.addCustomCallback(server, readerGroup->identifier,
                                                                               (UA_ServerCallback) UA_ReaderGroup_subscribeCallback,
                                                                               readerGroup,
                                                                               readerGroup->config.subscribingInterval,
@@ -1152,7 +1290,7 @@ UA_ReaderGroup_addSubscribeCallback(UA_Server *server, UA_ReaderGroup *readerGro
             return UA_STATUSCODE_BADNOTSUPPORTED;
         }
 
-        retval |= UA_PubSubManager_addRepeatedCallback(server,
+        res |= UA_PubSubManager_addRepeatedCallback(server,
                                                        (UA_ServerCallback) UA_ReaderGroup_subscribeCallback,
                                                        readerGroup,
                                                        readerGroup->config.subscribingInterval,
@@ -1161,7 +1299,7 @@ UA_ReaderGroup_addSubscribeCallback(UA_Server *server, UA_ReaderGroup *readerGro
                                                        &readerGroup->subscribeCallbackId);
     }
 
-    if(retval == UA_STATUSCODE_GOOD)
+    if(res == UA_STATUSCODE_GOOD)
         readerGroup->subscribeCallbackIsRegistered = true;
 
     /* Run once after creation */
@@ -1170,7 +1308,7 @@ UA_ReaderGroup_addSubscribeCallback(UA_Server *server, UA_ReaderGroup *readerGro
     if(readerGroup->config.enableBlockingSocket != UA_TRUE)
         UA_ReaderGroup_subscribeCallback(server, readerGroup);
 
-    return retval;
+    return res;
 }
 
 #ifdef UA_ENABLE_PUBSUB_ENCRYPTION
