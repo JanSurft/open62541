@@ -48,10 +48,7 @@ UA_StatusCode
 readNetworkMessage(const UA_Server *server, UA_ReaderGroup *readerGroup,
                       UA_ByteString *buffer, size_t *currentPosition,
                       UA_NetworkMessage *currentNetworkMessage);
-UA_StatusCode
-verifyAndDecrypt(const UA_Server *server, UA_ReaderGroup *readerGroup,
-                 UA_ByteString *buffer, const size_t *currentPosition,
-                 const UA_NetworkMessage *currentNetworkMessage, UA_StatusCode retval);
+
 static void
 UA_PubSubDSRDataSetField_sampleValue(UA_Server *server, UA_DataSetReader *dataSetReader,
                                      UA_DataValue *value, size_t fieldNumber) {
@@ -914,86 +911,157 @@ static void UA_DataSetMessage_freeDecodedPayload(UA_DataSetMessage *dsm) {
     }
 }
 
+static
+UA_StatusCode
+needsDecryption(const UA_Logger *logger,
+                const UA_NetworkMessage *networkMessage,
+                const UA_ReaderGroup *readerGroup,
+                UA_Boolean *doDecrypt) {
+
+    UA_Boolean isEncrypted = networkMessage->securityHeader.networkMessageEncrypted;
+    UA_Boolean requiresEncryption = readerGroup->config.securityMode > UA_MESSAGESECURITYMODE_SIGN;
+
+    UA_StatusCode retval = UA_STATUSCODE_GOOD;
+
+    if(isEncrypted && requiresEncryption) {
+        *doDecrypt = UA_TRUE;
+    } else if(!isEncrypted && !requiresEncryption) {
+        *doDecrypt = UA_FALSE;
+    } else {
+        if(isEncrypted) {
+            UA_LOG_ERROR(logger, UA_LOGCATEGORY_SECURITYPOLICY,
+                         "PubSub receive. "
+                         "Message is encrypted but ReaderGroup does not expect encryption");
+            retval = UA_STATUSCODE_BADSECURITYMODEINSUFFICIENT;
+        } else {
+            UA_LOG_ERROR(logger, UA_LOGCATEGORY_SECURITYPOLICY,
+                         "PubSub receive. "
+                         "Message is not encrypted but ReaderGroup requires encryption");
+            retval = UA_STATUSCODE_BADSECURITYMODEREJECTED;
+        }
+    }
+    return retval;
+}
+
+static
+UA_StatusCode
+needsValidation(const UA_Logger *logger,
+                    const UA_NetworkMessage *networkMessage,
+                    const UA_ReaderGroup *readerGroup,
+                    UA_Boolean *doValidate) {
+
+    UA_Boolean isSigned = networkMessage->securityHeader.networkMessageSigned;
+    UA_Boolean requiresSignature = readerGroup->config.securityMode > UA_MESSAGESECURITYMODE_NONE;
+
+    UA_StatusCode retval = UA_STATUSCODE_GOOD;
+
+    if(isSigned &&
+       requiresSignature) {
+        *doValidate = UA_TRUE;
+    } else if(!isSigned && !requiresSignature) {
+        *doValidate = UA_FALSE;
+    } else {
+
+        if(isSigned) {
+            UA_LOG_ERROR(logger, UA_LOGCATEGORY_SECURITYPOLICY,
+                         "PubSub receive. "
+                         "Message is signed but ReaderGroup does not expect signatures");
+            retval = UA_STATUSCODE_BADSECURITYMODEINSUFFICIENT;
+        } else {
+            UA_LOG_ERROR(logger, UA_LOGCATEGORY_SECURITYPOLICY,
+                         "PubSub receive. "
+                         "Message is not signed but ReaderGroup requires signature");
+            retval = UA_STATUSCODE_BADSECURITYMODEREJECTED;
+        }
+    }
+    return retval;
+}
+
+static
+UA_StatusCode
+verifyAndDecrypt(const UA_Server *server, UA_ReaderGroup *readerGroup,
+                 UA_ByteString *buffer, const size_t *currentPosition,
+                 const UA_NetworkMessage *currentNetworkMessage) {
+    void *channelContext = readerGroup->securityPolicyContext;
+    size_t sigSize = 0;
+    UA_StatusCode retval = UA_STATUSCODE_GOOD;
+
+    const UA_Logger* logger = &server->config.logger;
+    UA_Boolean doValidate = false;
+    UA_Boolean doDecrypt= false;
+
+    retval = needsValidation(logger, currentNetworkMessage, readerGroup, &doValidate);
+    UA_CHECK_ERROR(retval, logger, UA_LOGCATEGORY_SECURITYPOLICY,
+                   "PubSub receive. Validation security mode error");
+
+    retval = needsDecryption(logger, currentNetworkMessage, readerGroup, &doDecrypt);
+    UA_CHECK_ERROR(retval, logger, UA_LOGCATEGORY_SECURITYPOLICY
+                   ,"PubSub receive. Decryption security mode error");
+
+
+    if (doValidate) {
+        sigSize = readerGroup->config.securityPolicy->symmetricModule
+            .cryptoModule.signatureAlgorithm.getLocalSignatureSize(channelContext);
+
+        UA_ByteString toBeVerified = {buffer->length - sigSize, buffer->data};
+        UA_ByteString signature = {sigSize, buffer->data + buffer->length - sigSize};
+
+        retval = readerGroup->config.securityPolicy->symmetricModule.cryptoModule
+            .signatureAlgorithm.verify(channelContext, &toBeVerified, &signature);
+        UA_CHECK_ERROR(retval, logger, UA_LOGCATEGORY_SECURITYPOLICY,
+                       "PubSub receive. Signature invalid");
+
+        UA_LOG_DEBUG(logger, UA_LOGCATEGORY_SECURITYPOLICY,
+                         "PubSub receive. Signature valid");
+        buffer->length -= sigSize;
+    }
+
+    if (doDecrypt) {
+
+        retval = readerGroup->config.securityPolicy
+            ->setMessageNonce(channelContext,
+                              &currentNetworkMessage->securityHeader.messageNonce);
+        UA_CHECK_ERROR(retval, logger, UA_LOGCATEGORY_SECURITYPOLICY,
+                       "PubSub receive. Faulty Nonce set");
+
+        UA_ByteString toBeDecrypted =
+            {buffer->length - *currentPosition,
+             buffer->data + *currentPosition};
+        retval = readerGroup->config.securityPolicy->symmetricModule.cryptoModule
+            .encryptionAlgorithm.decrypt(channelContext, &toBeDecrypted);
+
+        UA_CHECK_ERROR(retval, logger, UA_LOGCATEGORY_SECURITYPOLICY,
+                     "PubSub receive. Faulty Decryption")
+    }
+    return UA_STATUSCODE_GOOD;
+error:
+    return retval;
+}
+
 UA_StatusCode
 readNetworkMessage(const UA_Server *server, UA_ReaderGroup *readerGroup,
                       UA_ByteString *buffer, size_t *currentPosition,
                       UA_NetworkMessage *currentNetworkMessage) {
 
-    UA_StatusCode retval = UA_NetworkMessage_decodeHeaders(buffer, currentPosition, currentNetworkMessage);
-    if(retval != UA_STATUSCODE_GOOD) return retval;
+    const UA_Logger *logger = &server->config.logger;
+
+    UA_StatusCode res = UA_NetworkMessage_decodeHeaders(buffer, currentPosition, currentNetworkMessage);
+    UA_CHECK_ERROR(res, logger, UA_LOGCATEGORY_SERVER, "PubSub receive. decoding headers failed");
 
 #ifdef UA_ENABLE_PUBSUB_ENCRYPTION
-
-    retval = verifyAndDecrypt(server, readerGroup, buffer, currentPosition, currentNetworkMessage,
-                     retval);
-    if(retval != UA_STATUSCODE_GOOD) return retval;
-
+    res = verifyAndDecrypt(server, readerGroup, buffer, currentPosition, currentNetworkMessage);
+    UA_CHECK_ERROR(res, logger, UA_LOGCATEGORY_SERVER, "PubSub receive. verify and decrypt failed");
 #endif
-    retval = UA_NetworkMessage_decodePayload(buffer, currentPosition, currentNetworkMessage);
-    if(retval != UA_STATUSCODE_GOOD) return retval;
 
-    retval = UA_NetworkMessage_decodeFooters(buffer, currentPosition, currentNetworkMessage);
-    if(retval != UA_STATUSCODE_GOOD) return retval;
+    res = UA_NetworkMessage_decodePayload(buffer, currentPosition, currentNetworkMessage);
+    UA_CHECK_ERROR(res, logger, UA_LOGCATEGORY_SERVER, "PubSub receive. decoding payload failed");
+
+    res = UA_NetworkMessage_decodeFooters(buffer, currentPosition, currentNetworkMessage);
+    UA_CHECK_ERROR(res, logger, UA_LOGCATEGORY_SERVER, "PubSub receive. decoding footers failed");
 
     return UA_STATUSCODE_GOOD;
-}
-
-UA_StatusCode
-verifyAndDecrypt(const UA_Server *server, UA_ReaderGroup *readerGroup,
-                 UA_ByteString *buffer, const size_t *currentPosition,
-                 const UA_NetworkMessage *currentNetworkMessage, UA_StatusCode retval) {
-    void *channelContext = readerGroup->securityPolicyContext;
-    size_t sigSize = 0;
-
-    if ((*currentNetworkMessage).securityHeader.networkMessageSigned) {
-
-        sigSize = readerGroup->config.securityPolicy->symmetricModule
-            .cryptoModule.signatureAlgorithm.getLocalSignatureSize(channelContext);
-
-        UA_ByteString toBeVerified = {(*buffer).length - sigSize, (*buffer).data};
-        UA_ByteString signature = {sigSize, (*buffer).data + (*buffer).length - sigSize};
-
-        retval = readerGroup->config.securityPolicy->symmetricModule.cryptoModule
-            .signatureAlgorithm.verify(channelContext, &toBeVerified, &signature);
-
-        if (retval != UA_STATUSCODE_GOOD) {
-            // TODO: decide what to do on verify fail
-            UA_LOG_ERROR(&server->config.logger, UA_LOGCATEGORY_SECURITYPOLICY,
-                         "PubSub receive. Invalid Signature");
-            return retval;
-        } else {
-            UA_LOG_DEBUG(&server->config.logger, UA_LOGCATEGORY_SECURITYPOLICY,
-                         "PubSub receive. Signature Valid");
-        }
-
-        buffer->length -= sigSize;
-    }
-
-    if ((*currentNetworkMessage).securityHeader.networkMessageEncrypted) {
-
-        retval = readerGroup->config.securityPolicy
-            ->setMessageNonce(channelContext,
-                              &(*currentNetworkMessage).securityHeader.messageNonce);
-        if (retval != UA_STATUSCODE_GOOD) {
-            // TODO: decide what to do on nonce fail
-            UA_LOG_ERROR(&server->config.logger, UA_LOGCATEGORY_SECURITYPOLICY,
-                         "PubSub receive. Faulty Nonce set");
-            return retval;
-        }
-        UA_ByteString toBeDecrypted =
-            {(*buffer).length - (*currentPosition),
-             (*buffer).data + (*currentPosition)};
-        retval = readerGroup->config.securityPolicy->symmetricModule.cryptoModule
-            .encryptionAlgorithm.decrypt(channelContext, &toBeDecrypted);
-
-        if (retval != UA_STATUSCODE_GOOD) {
-            // TODO: decide what to do on decrypt fail
-            UA_LOG_ERROR(&server->config.logger, UA_LOGCATEGORY_SECURITYPOLICY,
-                         "PubSub receive. Faulty Decryption");
-            return retval;
-        }
-    }
-    return UA_STATUSCODE_GOOD;
+error:
+    return res;
 }
 
 /* This callback triggers the collection and reception of NetworkMessages and the
