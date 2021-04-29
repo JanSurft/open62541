@@ -44,11 +44,6 @@ UA_Server_ReaderGroup_clear(UA_Server* server, UA_ReaderGroup *readerGroup);
 static void
 UA_DataSetReader_clear(UA_Server *server, UA_DataSetReader *dataSetReader);
 
-UA_StatusCode
-readNetworkMessage(const UA_Server *server, UA_ReaderGroup *readerGroup,
-                      UA_ByteString *buffer, size_t *currentPosition,
-                      UA_NetworkMessage *currentNetworkMessage);
-
 static void
 UA_PubSubDSRDataSetField_sampleValue(UA_Server *server, UA_DataSetReader *dataSetReader,
                                      UA_DataValue *value, size_t fieldNumber) {
@@ -915,11 +910,11 @@ static
 UA_StatusCode
 needsDecryption(const UA_Logger *logger,
                 const UA_NetworkMessage *networkMessage,
-                const UA_ReaderGroup *readerGroup,
+                const UA_MessageSecurityMode securityMode,
                 UA_Boolean *doDecrypt) {
 
     UA_Boolean isEncrypted = networkMessage->securityHeader.networkMessageEncrypted;
-    UA_Boolean requiresEncryption = readerGroup->config.securityMode > UA_MESSAGESECURITYMODE_SIGN;
+    UA_Boolean requiresEncryption = securityMode > UA_MESSAGESECURITYMODE_SIGN;
 
     UA_StatusCode retval = UA_STATUSCODE_GOOD;
 
@@ -947,11 +942,11 @@ static
 UA_StatusCode
 needsValidation(const UA_Logger *logger,
                     const UA_NetworkMessage *networkMessage,
-                    const UA_ReaderGroup *readerGroup,
+                    const UA_MessageSecurityMode securityMode,
                     UA_Boolean *doValidate) {
 
     UA_Boolean isSigned = networkMessage->securityHeader.networkMessageSigned;
-    UA_Boolean requiresSignature = readerGroup->config.securityMode > UA_MESSAGESECURITYMODE_NONE;
+    UA_Boolean requiresSignature = securityMode > UA_MESSAGESECURITYMODE_NONE;
 
     UA_StatusCode retval = UA_STATUSCODE_GOOD;
 
@@ -979,35 +974,37 @@ needsValidation(const UA_Logger *logger,
 
 static
 UA_StatusCode
-verifyAndDecrypt(const UA_Server *server, UA_ReaderGroup *readerGroup,
+verifyAndDecrypt(const UA_Logger *logger,
+                     UA_MessageSecurityMode securityMode,
                  UA_ByteString *buffer, const size_t *currentPosition,
-                 const UA_NetworkMessage *currentNetworkMessage) {
-    void *channelContext = readerGroup->securityPolicyContext;
+                 const UA_NetworkMessage *currentNetworkMessage,
+                     void *channelContext,
+                 UA_StatusCode (*setNonce)(void *,const UA_ByteString *),
+                 size_t (*getSignatureSize)(const void *),
+                 UA_StatusCode (*verify)(void *,const UA_ByteString *,const UA_ByteString *),
+                 UA_StatusCode (*decrypt)(void *, UA_ByteString *)
+) {
     size_t sigSize = 0;
     UA_StatusCode retval = UA_STATUSCODE_GOOD;
 
-    const UA_Logger* logger = &server->config.logger;
     UA_Boolean doValidate = false;
     UA_Boolean doDecrypt= false;
 
-    retval = needsValidation(logger, currentNetworkMessage, readerGroup, &doValidate);
+    retval = needsValidation(logger, currentNetworkMessage, securityMode, &doValidate);
     UA_CHECK_ERROR(retval, logger, UA_LOGCATEGORY_SECURITYPOLICY,
                    "PubSub receive. Validation security mode error");
 
-    retval = needsDecryption(logger, currentNetworkMessage, readerGroup, &doDecrypt);
+    retval = needsDecryption(logger, currentNetworkMessage, securityMode, &doDecrypt);
     UA_CHECK_ERROR(retval, logger, UA_LOGCATEGORY_SECURITYPOLICY
                    ,"PubSub receive. Decryption security mode error");
 
-
     if (doValidate) {
-        sigSize = readerGroup->config.securityPolicy->symmetricModule
-            .cryptoModule.signatureAlgorithm.getLocalSignatureSize(channelContext);
+        sigSize = getSignatureSize(channelContext);
 
         UA_ByteString toBeVerified = {buffer->length - sigSize, buffer->data};
         UA_ByteString signature = {sigSize, buffer->data + buffer->length - sigSize};
 
-        retval = readerGroup->config.securityPolicy->symmetricModule.cryptoModule
-            .signatureAlgorithm.verify(channelContext, &toBeVerified, &signature);
+        retval = verify(channelContext, &toBeVerified, &signature);
         UA_CHECK_ERROR(retval, logger, UA_LOGCATEGORY_SECURITYPOLICY,
                        "PubSub receive. Signature invalid");
 
@@ -1018,8 +1015,7 @@ verifyAndDecrypt(const UA_Server *server, UA_ReaderGroup *readerGroup,
 
     if (doDecrypt) {
 
-        retval = readerGroup->config.securityPolicy
-            ->setMessageNonce(channelContext,
+        retval = setNonce(channelContext,
                               &currentNetworkMessage->securityHeader.messageNonce);
         UA_CHECK_ERROR(retval, logger, UA_LOGCATEGORY_SECURITYPOLICY,
                        "PubSub receive. Faulty Nonce set");
@@ -1027,9 +1023,7 @@ verifyAndDecrypt(const UA_Server *server, UA_ReaderGroup *readerGroup,
         UA_ByteString toBeDecrypted =
             {buffer->length - *currentPosition,
              buffer->data + *currentPosition};
-        retval = readerGroup->config.securityPolicy->symmetricModule.cryptoModule
-            .encryptionAlgorithm.decrypt(channelContext, &toBeDecrypted);
-
+        retval = decrypt(channelContext, &toBeDecrypted);
         UA_CHECK_ERROR(retval, logger, UA_LOGCATEGORY_SECURITYPOLICY,
                      "PubSub receive. Faulty Decryption")
     }
@@ -1038,18 +1032,25 @@ error:
     return retval;
 }
 
+static
 UA_StatusCode
-readNetworkMessage(const UA_Server *server, UA_ReaderGroup *readerGroup,
-                      UA_ByteString *buffer, size_t *currentPosition,
-                      UA_NetworkMessage *currentNetworkMessage) {
-
-    const UA_Logger *logger = &server->config.logger;
+readNetworkMessage(const UA_Logger *logger, UA_MessageSecurityMode securityMode,
+                       UA_ByteString *buffer, size_t *currentPosition,
+                       UA_NetworkMessage *currentNetworkMessage,
+                       void *channelContext,
+                       UA_StatusCode (*setNonce)(void *,const UA_ByteString *),
+                       size_t (*getSignatureSize)(const void *),
+                       UA_StatusCode (*verify)(void *,const UA_ByteString *,const UA_ByteString *),
+                       UA_StatusCode (*decrypt)(void *, UA_ByteString *)
+                   ) {
 
     UA_StatusCode res = UA_NetworkMessage_decodeHeaders(buffer, currentPosition, currentNetworkMessage);
     UA_CHECK_ERROR(res, logger, UA_LOGCATEGORY_SERVER, "PubSub receive. decoding headers failed");
 
 #ifdef UA_ENABLE_PUBSUB_ENCRYPTION
-    res = verifyAndDecrypt(server, readerGroup, buffer, currentPosition, currentNetworkMessage);
+    res = verifyAndDecrypt(logger, securityMode, buffer, currentPosition, currentNetworkMessage,
+                           channelContext,
+                           setNonce, getSignatureSize, verify, decrypt);
     UA_CHECK_ERROR(res, logger, UA_LOGCATEGORY_SERVER, "PubSub receive. verify and decrypt failed");
 #endif
 
@@ -1074,8 +1075,21 @@ receiveNetworkMessage(UA_Server *server, UA_ReaderGroup *readerGroup,
     memset(&currentNetworkMessage, 0, sizeof(UA_NetworkMessage));
 
     UA_StatusCode res =
-        readNetworkMessage(server, readerGroup, buffer,
-                           currentPosition, &currentNetworkMessage);
+        readNetworkMessage(&server->config.logger,
+                           readerGroup->config.securityMode,
+                           buffer,
+                           currentPosition,
+                           &currentNetworkMessage,
+                           readerGroup->securityPolicyContext,
+                           readerGroup->config.securityPolicy
+                               ->setMessageNonce,
+                           readerGroup->config.securityPolicy->symmetricModule
+                               .cryptoModule.signatureAlgorithm.getLocalSignatureSize,
+                           readerGroup->config.securityPolicy->symmetricModule
+                               .cryptoModule.signatureAlgorithm.verify,
+                           readerGroup->config.securityPolicy->symmetricModule
+                               .cryptoModule.encryptionAlgorithm.decrypt
+                           );
 
     UA_CHECK_ERROR(res, &server->config.logger, UA_LOGCATEGORY_SERVER,
                    "Subscribe failed. receive network message failed.");
