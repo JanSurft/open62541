@@ -1179,73 +1179,34 @@ receiveNetworkMessageRT(UA_Server *server, UA_ReaderGroup *readerGroup,
     return UA_STATUSCODE_GOOD;
 }
 
-static UA_StatusCode
-receiveNetworkMessageWithFunc(
-    UA_Server *server, UA_ReaderGroup *readerGroup,
-    UA_PubSubConnection *connection, UA_ByteString *buffer, size_t *currentPosition,
-    size_t previousPosition,
-    UA_StatusCode (*receiveNetworkMessageFunc)(UA_Server *, UA_ReaderGroup *,
-                                               UA_PubSubConnection *, size_t,
-                                               UA_ByteString *, size_t *)) {
-    UA_StatusCode res;
-
-    do {
-        res = receiveNetworkMessageFunc(server, readerGroup, connection, previousPosition, buffer, currentPosition);
-        UA_CHECK_ERROR(res, &server->config.logger, UA_LOGCATEGORY_SERVER, "SubscribeCallback(): receive message failed");
-
-    } while(((*buffer).length) > (*currentPosition));
-    return UA_STATUSCODE_GOOD;
-error:
-    return res;
-}
-
 static
 UA_StatusCode
-receiveBufferedData(UA_Server *server, UA_ReaderGroup *readerGroup,
-                    UA_PubSubConnection *connection) __attribute__ ((unused));
-static
-UA_StatusCode
-receiveBufferedData(UA_Server *server, UA_ReaderGroup *readerGroup,
-                    UA_PubSubConnection *connection) {
+receiveBufferedNetworkMessage(UA_Server *server, UA_ReaderGroup *readerGroup,
+                              UA_PubSubConnection *connection) {
     UA_ByteString buffer;
     buffer.length = RECEIVE_MSG_BUFFER_SIZE;
     buffer.data = ReceiveMsgBuffer;
+
     UA_StatusCode res = connection->channel->receive(connection->channel, &buffer, NULL, readerGroup->config.timeout);
-    UA_CHECK_ERROR(res, &server->config.logger, UA_LOGCATEGORY_SERVER,
-                   "SubscribeCallback(): Connection receive failed!");
+    UA_CHECK_ERROR(res, &server->config.logger, UA_LOGCATEGORY_SERVER, "SubscribeCallback(): Connection receive failed!");
 
-    if (buffer.length == 0) {
-        return UA_STATUSCODE_GOOD;
-    }
-
-    size_t currentPosition = 0;
-    size_t previousPosition = 0;
-
-    if(readerGroup->config.rtLevel == UA_PUBSUB_RT_FIXED_SIZE) {
-
-        if(readerGroup->config.securityMode > UA_MESSAGESECURITYMODE_NONE) {
-            // TODO: maybe make this possible in future
-            UA_LOG_ERROR(&server->config.logger, UA_LOGCATEGORY_SERVER,
-                         "Security mode for RT not valid");
-            goto error;
+    if(buffer.length > 0) {
+        size_t currentPosition = 0;
+        size_t previousPosition = 0;
+        if (readerGroup->config.rtLevel == UA_PUBSUB_RT_FIXED_SIZE) {
+            do {
+                res = receiveNetworkMessageRT(server, readerGroup, connection, previousPosition, &buffer, &currentPosition);
+                UA_CHECK_ERROR(res, &server->config.logger, UA_LOGCATEGORY_SERVER, "SubscribeCallback(): receive message failed");
+            } while((buffer.length) > currentPosition);
+        } else {
+            UA_LOG_DEBUG(&server->config.logger, UA_LOGCATEGORY_USERLAND, "Message received:");
+            do {
+                res = receiveNetworkMessage(server, readerGroup, connection, previousPosition, &buffer, &currentPosition);
+                UA_CHECK_ERROR(res, &server->config.logger, UA_LOGCATEGORY_SERVER, "SubscribeCallback(): receive message failed");
+            } while((buffer.length) > currentPosition);
         }
-        res = receiveNetworkMessageWithFunc(server, readerGroup, connection, &buffer,
-                                            &currentPosition, previousPosition,
-                                            &receiveNetworkMessageRT);
-        UA_CHECK_ERROR(res, &server->config.logger, UA_LOGCATEGORY_SERVER,
-                       "receive RT message failed")
-
-    } else {
-        res = receiveNetworkMessageWithFunc(server, readerGroup, connection, &buffer,
-                                            &currentPosition, previousPosition,
-                                            &receiveNetworkMessage);
-        UA_CHECK_ERROR(res, &server->config.logger, UA_LOGCATEGORY_SERVER,
-                       "receive message failed")
     }
-
-    UA_ByteString_clear(&buffer);
     return UA_STATUSCODE_GOOD;
-
 error:
     UA_ByteString_clear(&buffer);
     return res;
@@ -1267,89 +1228,7 @@ void UA_ReaderGroup_subscribeCallback(UA_Server *server, UA_ReaderGroup *readerG
         goto error;
     }
 
-    UA_ByteString buffer;
-    buffer.length = RECEIVE_MSG_BUFFER_SIZE;
-    buffer.data = ReceiveMsgBuffer;
-    UA_StatusCode res = connection->channel->receive(connection->channel, &buffer, NULL, readerGroup->config.timeout);
-    if (UA_StatusCode_isBad(res)) {
-        UA_LOG_ERROR(&server->config.logger, UA_LOGCATEGORY_SERVER, "SubscribeCallback(): Connection receive failed!");
-        UA_ReaderGroup_setPubSubState(server, UA_PUBSUBSTATE_ERROR, readerGroup);
-        UA_ByteString_clear(&buffer);
-        return;
-    }
-
-    if(buffer.length > 0) {
-        size_t currentPosition = 0;
-        size_t previousPosition = 0;
-        if (readerGroup->config.rtLevel == UA_PUBSUB_RT_FIXED_SIZE) {
-            do {
-#ifdef UA_ENABLE_PUBSUB_BUFMALLOC
-                useMembufAlloc();
-#endif /* UA_ENABLE_PUBSUB_BUFMALLOC */
-
-                /* Considering max DSM as 1
-                * TODO:
-                * Process with the static value source
-                */
-                size_t paddingBytes = 0;
-                UA_DataSetReader *dataSetReader = LIST_FIRST(&readerGroup->readers);
-                /* Decode only the necessary offset and update the networkMessage */
-                if(UA_NetworkMessage_updateBufferedNwMessage(&dataSetReader->bufferedMessage, &buffer, &currentPosition) != UA_STATUSCODE_GOOD) {
-                    UA_LOG_INFO(&server->config.logger, UA_LOGCATEGORY_SERVER,
-                                "PubSub receive. Unknown field type.");
-                    UA_DataSetMessage_freeDecodedPayload(dataSetReader->bufferedMessage.nm->payload.dataSetPayload.dataSetMessages);
-#ifdef UA_ENABLE_PUBSUB_BUFMALLOC
-                    useNormalAlloc();
-#endif /* UA_ENABLE_PUBSUB_BUFMALLOC */
-                    return;
-                }
-
-                /* Check the decoded message is the expected one
-                 * TODO: PublisherID check after modification in NM to support all datatypes */
-                if((dataSetReader->bufferedMessage.nm->groupHeader.writerGroupId != dataSetReader->config.writerGroupId) ||
-                   (*dataSetReader->bufferedMessage.nm->payloadHeader.dataSetPayloadHeader.dataSetWriterIds != dataSetReader->config.dataSetWriterId)) {
-                    UA_LOG_INFO(&server->config.logger, UA_LOGCATEGORY_SERVER,
-                                "PubSub receive. Unknown message received. Will not be processed.");
-                    UA_DataSetMessage_freeDecodedPayload(dataSetReader->bufferedMessage.nm->payload.dataSetPayload.dataSetMessages);
-#ifdef UA_ENABLE_PUBSUB_BUFMALLOC
-                    useNormalAlloc();
-#endif /* UA_ENABLE_PUBSUB_BUFMALLOC */
-                    return;
-                }
-
-                UA_DataSetReader_process(server, dataSetReader,
-                                         dataSetReader->bufferedMessage.nm->payload.dataSetPayload.dataSetMessages);
-
-                UA_DataSetMessage_freeDecodedPayload(dataSetReader->bufferedMessage.nm->payload.dataSetPayload.dataSetMessages);
-
-#ifdef UA_ENABLE_PUBSUB_BUFMALLOC
-                useNormalAlloc();
-#endif /* UA_ENABLE_PUBSUB_BUFMALLOC */
-
-                /* Minimum ethernet packet size is 64 bytes where the header size is 14 bytes and FCS size is 4 bytes
-                 * so remaining minimum payload size of ethernet packet is 46 bytes */
-                /* TODO: Need to handle padding bytes for UDP */
-                if (((currentPosition - previousPosition) < MIN_PAYLOAD_SIZE_ETHERNET) &&
-                    (strncmp((const char *)connection->config->transportProfileUri.data, "http://opcfoundation.org/UA-Profile/Transport/pubsub-eth-uadp", (size_t)(connection->config->transportProfileUri.length)) == 0)) {
-                    paddingBytes = (MIN_PAYLOAD_SIZE_ETHERNET - (currentPosition - previousPosition));
-                    currentPosition += paddingBytes; /* During multiple receive, move the position to handle padding bytes */
-                }
-
-                previousPosition = currentPosition;
-            } while((buffer.length) > currentPosition);
-
-            return;
-
-        } else {
-            UA_LOG_DEBUG(&server->config.logger, UA_LOGCATEGORY_USERLAND, "Message received:");
-            do {
-
-                res = receiveNetworkMessage(server, readerGroup, connection, previousPosition, &buffer, &currentPosition);
-                UA_CHECK_ERROR(res, &server->config.logger, UA_LOGCATEGORY_SERVER, "SubscribeCallback(): receive message failed");
-
-            } while((buffer.length) > currentPosition);
-        }
-    }
+    receiveBufferedNetworkMessage(server, readerGroup, connection);
 
     return;
 
