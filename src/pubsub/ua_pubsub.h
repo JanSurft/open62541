@@ -299,6 +299,22 @@ UA_ReaderGroup_addSubscribeCallback(UA_Server *server, UA_ReaderGroup *readerGro
 void
 UA_ReaderGroup_subscribeCallback(UA_Server *server, UA_ReaderGroup *readerGroup);
 
+/*********************************************************/
+/*               Reading Message handling                */
+/*********************************************************/
+
+UA_StatusCode
+readNetworkMessage(const UA_Logger *logger, UA_MessageSecurityMode securityMode,
+                   UA_ByteString *buffer, size_t *currentPosition,
+                   UA_NetworkMessage *currentNetworkMessage,
+                   void *channelContext,
+                   UA_StatusCode (*setNonce)(void *,const UA_ByteString *),
+                   size_t (*getSignatureSize)(const void *),
+                   UA_StatusCode (*verify)(void *,const UA_ByteString *,const UA_ByteString *),
+                   UA_StatusCode (*decrypt)(void *, UA_ByteString *)
+);
+
+
 #endif /* UA_ENABLE_PUBSUB */
 
 _UA_END_DECLS

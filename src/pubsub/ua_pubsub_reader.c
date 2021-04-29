@@ -1032,7 +1032,6 @@ error:
     return retval;
 }
 
-static
 UA_StatusCode
 readNetworkMessage(const UA_Logger *logger, UA_MessageSecurityMode securityMode,
                        UA_ByteString *buffer, size_t *currentPosition,
