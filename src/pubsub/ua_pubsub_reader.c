@@ -1179,6 +1179,30 @@ receiveNetworkMessageRT(UA_Server *server, UA_ReaderGroup *readerGroup,
     return UA_STATUSCODE_GOOD;
 }
 
+static UA_StatusCode
+receiveNetworkMessageWithFunc(
+    UA_Server *server, UA_ReaderGroup *readerGroup,
+    UA_PubSubConnection *connection, UA_ByteString *buffer, size_t *currentPosition,
+    size_t previousPosition,
+    UA_StatusCode (*receiveNetworkMessageFunc)(UA_Server *, UA_ReaderGroup *,
+                                               UA_PubSubConnection *, size_t,
+                                               UA_ByteString *, size_t *)) {
+    UA_StatusCode res;
+
+    do {
+        res = receiveNetworkMessageFunc(server, readerGroup, connection, previousPosition, buffer, currentPosition);
+        UA_CHECK_ERROR(res, &server->config.logger, UA_LOGCATEGORY_SERVER, "SubscribeCallback(): receive message failed");
+
+    } while(((*buffer).length) > (*currentPosition));
+    return UA_STATUSCODE_GOOD;
+error:
+    return res;
+}
+
+static
+UA_StatusCode
+receiveBufferedData(UA_Server *server, UA_ReaderGroup *readerGroup,
+                    UA_PubSubConnection *connection) __attribute__ ((unused));
 static
 UA_StatusCode
 receiveBufferedData(UA_Server *server, UA_ReaderGroup *readerGroup,
@@ -1205,7 +1229,6 @@ receiveBufferedData(UA_Server *server, UA_ReaderGroup *readerGroup,
                          "Security mode for RT not valid");
             goto error;
         }
-        
         res = receiveNetworkMessageWithFunc(server, readerGroup, connection, &buffer,
                                             &currentPosition, previousPosition,
                                             &receiveNetworkMessageRT);
@@ -1231,21 +1254,17 @@ error:
  * contained DataSetMessages. */
 void UA_ReaderGroup_subscribeCallback(UA_Server *server, UA_ReaderGroup *readerGroup) {
 
-    UA_LOG_DEBUG(&server->config.logger, UA_LOGCATEGORY_SERVER, "PubSub subscribe callback");
+    UA_assert(server);
+    UA_assert(readerGroup);
 
-    if(!readerGroup) {
-        UA_LOG_ERROR(&server->config.logger, UA_LOGCATEGORY_SERVER,
-            "Subscribe failed. ReaderGroup not found");
-        return;
-    }
+    UA_LOG_DEBUG(&server->config.logger, UA_LOGCATEGORY_SERVER, "PubSub subscribe callback");
 
     UA_PubSubConnection *connection =
         UA_PubSubConnection_findConnectionbyId(server, readerGroup->linkedConnection);
     if (!connection) {
         UA_LOG_ERROR(&server->config.logger, UA_LOGCATEGORY_SERVER, "SubscribeCallback(): "
             "Find linked connection failed");
-        UA_ReaderGroup_setPubSubState(server, UA_PUBSUBSTATE_ERROR, readerGroup);
-        return;
+        goto error;
     }
 
     UA_ByteString buffer;
@@ -1325,41 +1344,17 @@ void UA_ReaderGroup_subscribeCallback(UA_Server *server, UA_ReaderGroup *readerG
             UA_LOG_DEBUG(&server->config.logger, UA_LOGCATEGORY_USERLAND, "Message received:");
             do {
 
-                size_t paddingBytes = 0;
-                UA_NetworkMessage currentNetworkMessage;
-                memset(&currentNetworkMessage, 0, sizeof(UA_NetworkMessage));
+                res = receiveNetworkMessage(server, readerGroup, connection, previousPosition, &buffer, &currentPosition);
+                UA_CHECK_ERROR(res, &server->config.logger, UA_LOGCATEGORY_SERVER, "SubscribeCallback(): receive message failed");
 
-                UA_StatusCode retval =
-                    readNetworkMessage(server, readerGroup, &buffer, &currentPosition,
-                                       &currentNetworkMessage);
-
-                if (UA_StatusCode_isBad(retval)) {
-                    UA_LOG_ERROR(&server->config.logger, UA_LOGCATEGORY_SERVER,
-                                 "Subscribe failed. receive network message failed.");
-                    UA_NetworkMessage_clear(&currentNetworkMessage);
-                    return;
-                }
-
-                // UA_NetworkMessage_decodeBinary(&buffer, &currentPosition,
-                // &currentNetworkMessage);
-                /* TODO: We already know the ReaderGroup at this point. Now we loose that information.
-                 * There is only one place where UA_PubSubConnection_processNetworkMessage is used. */
-                UA_PubSubConnection_processNetworkMessage(server, connection, &currentNetworkMessage);
-                UA_NetworkMessage_clear(&currentNetworkMessage);
-
-                /* Minimum ethernet packet size is 64 bytes where the header size is 14 bytes and FCS size is 4 bytes
-                 * so remaining minimum payload size of ethernet packet is 46 bytes */
-                /* TODO: Need to handle padding bytes for UDP */
-                if (((currentPosition - previousPosition) < MIN_PAYLOAD_SIZE_ETHERNET) &&
-                    (strncmp((const char *)connection->config->transportProfileUri.data, "http://opcfoundation.org/UA-Profile/Transport/pubsub-eth-uadp", (size_t)(connection->config->transportProfileUri.length)) == 0)) {
-                    paddingBytes = (MIN_PAYLOAD_SIZE_ETHERNET - (currentPosition - previousPosition));
-                    currentPosition += paddingBytes; /* During multiple receive, move the position to handle padding bytes */
-                }
-
-                previousPosition = currentPosition;
             } while((buffer.length) > currentPosition);
         }
     }
+
+    return;
+
+error:
+    UA_ReaderGroup_setPubSubState(server, UA_PUBSUBSTATE_ERROR, readerGroup);
 }
 
 
