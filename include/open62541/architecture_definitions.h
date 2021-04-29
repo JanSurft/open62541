@@ -502,4 +502,14 @@ UA_atomic_subSize(volatile size_t *addr, size_t decrease) {
 #endif
 }
 
+#define UA_CHECK(CODE) if((CODE) != UA_STATUSCODE_GOOD) { goto error; }
+/*
+#define UA_CHECK_ERROR(CODE, LOGGER, SCOPE, MSG, ...) if((CODE) != UA_STATUSCODE_GOOD) { \
+        UA_LOG_ERROR((LOGGER), (SCOPE), (MSG), ##__VA_ARGS__); goto error; }
+*/
+#define UA_CHECK_ERROR(CODE, LOGGER, SCOPE, MSG) if((CODE) != UA_STATUSCODE_GOOD) { \
+        UA_LOG_ERROR((LOGGER), (SCOPE), (MSG)); goto error; }
+
+#define UA_CHECK_MEM(A) if(!(A)) { goto error; }
+
 #endif /* ARCH_UA_ARCHITECTURE_DEFINITIONS_H_ */

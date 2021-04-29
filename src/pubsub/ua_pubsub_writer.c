@@ -2084,67 +2084,72 @@ static UA_StatusCode
 encryptAndSign(UA_WriterGroup *wg, const UA_NetworkMessage *nm,
                  UA_Byte *networkMessageStart, UA_Byte *payloadStart,
                  UA_Byte *footerEnd) {
-    UA_StatusCode retval;
+    UA_StatusCode rv;
     void *channelContext = wg->securityPolicyContext;
 
-    if((*nm).securityHeader.networkMessageEncrypted) {
+    if(nm->securityHeader.networkMessageEncrypted) {
         /* Set the temporary MessageNonce in the SecurityPolicy */
-        retval = wg->config.securityPolicy->setMessageNonce(channelContext, &(*nm).securityHeader.messageNonce);
-        if(retval != UA_STATUSCODE_GOOD) return retval;
+        rv = wg->config.securityPolicy->setMessageNonce(channelContext, &nm->securityHeader.messageNonce);
+        UA_CHECK(rv);
 
         /* The encryption is done in-place, no need to encode again */
         UA_ByteString toBeEncrypted = {(uintptr_t)footerEnd - (uintptr_t)payloadStart,
                                        payloadStart};
-        retval = wg->config.securityPolicy->symmetricModule.cryptoModule.encryptionAlgorithm
+        rv = wg->config.securityPolicy->symmetricModule.cryptoModule.encryptionAlgorithm
             .encrypt(channelContext, &toBeEncrypted);
-
-        if(retval != UA_STATUSCODE_GOOD) return retval;
+        UA_CHECK(rv);
     }
 
-    if((*nm).securityHeader.networkMessageSigned) {
+    if(nm->securityHeader.networkMessageSigned) {
         UA_ByteString toBeSigned = {(uintptr_t)footerEnd - (uintptr_t)networkMessageStart,
                                     networkMessageStart};
 
         size_t sigSize = wg->config.securityPolicy->symmetricModule.cryptoModule.
             signatureAlgorithm.getLocalSignatureSize(channelContext);
         UA_ByteString signature = {sigSize, footerEnd};
-        retval = wg->config.securityPolicy->symmetricModule.cryptoModule.
-            signatureAlgorithm.sign(channelContext, &toBeSigned, &signature);
 
-        if(retval != UA_STATUSCODE_GOOD) return retval;
+        rv = wg->config.securityPolicy->symmetricModule.cryptoModule.
+            signatureAlgorithm.sign(channelContext, &toBeSigned, &signature);
+        UA_CHECK(rv);
     }
     return UA_STATUSCODE_GOOD;
+
+error:
+    return rv;
 }
 
 static UA_StatusCode
-writeNetworkMessage(UA_WriterGroup *wg, UA_StatusCode retval, size_t msgSize,
+writeNetworkMessage(UA_WriterGroup *wg, size_t msgSize,
                     UA_NetworkMessage *nm, UA_ByteString *buf) { /* Encode the message */
-    UA_Byte *bufPos = (*buf).data;
+    UA_Byte *bufPos = buf->data;
     memset(bufPos, 0, msgSize);
-    UA_Byte *bufEnd = &(*buf).data[(*buf).length];
+    UA_Byte *bufEnd = &buf->data[buf->length];
 
     UA_Byte *networkMessageStart = bufPos;
-    retval = UA_NetworkMessage_encodeHeaders(nm, &bufPos, bufEnd);
-    if(retval != UA_STATUSCODE_GOOD) return retval;
+    UA_StatusCode retval = UA_NetworkMessage_encodeHeaders(nm, &bufPos, bufEnd);
+    UA_CHECK(retval);
 
     UA_Byte *payloadStart = bufPos;
     retval = UA_NetworkMessage_encodePayload(nm, &bufPos, bufEnd);
-    if(retval != UA_STATUSCODE_GOOD) return retval;
+    UA_CHECK(retval);
     UA_Byte *payloadEnd = bufPos;
 
     UA_Byte *footerStart = bufPos;
     retval = UA_NetworkMessage_encodeFooters(nm, &bufPos, bufEnd);
-    if(retval != UA_STATUSCODE_GOOD) return retval;
+    UA_CHECK(retval);
     UA_Byte *footerEnd = bufPos;
 
     /* Encrypt and Sign the message */
 #ifdef UA_ENABLE_PUBSUB_ENCRYPTION
 
     retval = encryptAndSign(wg, nm, networkMessageStart, payloadStart, footerEnd);
-    if(retval != UA_STATUSCODE_GOOD) return retval;
+    UA_CHECK(retval);
 
 #endif
     return UA_STATUSCODE_GOOD;
+
+error:
+    return retval;
 }
 static UA_StatusCode
 sendNetworkMessage(UA_PubSubConnection *connection, UA_WriterGroup *wg,
@@ -2153,14 +2158,11 @@ sendNetworkMessage(UA_PubSubConnection *connection, UA_WriterGroup *wg,
                    UA_ExtensionObject *transportSettings) {
     UA_NetworkMessage nm;
     memset(&nm, 0, sizeof(UA_NetworkMessage));
+
     UA_StatusCode retval =
         generateNetworkMessage(connection, wg, dsm, writerIds, dsmCount,
                                messageSettings, transportSettings, &nm);
-    if(retval != UA_STATUSCODE_GOOD) {
-        UA_ByteString_clear(&nm.securityHeader.messageNonce);
-        UA_free(nm.payload.dataSetPayload.sizes);
-        return retval;
-    }
+    UA_CHECK(retval);
 
     /* Allocate the buffer. Allocate on the stack if the buffer is small. */
     UA_ByteString buf;
@@ -2183,25 +2185,24 @@ sendNetworkMessage(UA_PubSubConnection *connection, UA_WriterGroup *wg,
         buf.length = msgSize;
     } else {
         retval = UA_ByteString_allocBuffer(&buf, msgSize);
-        if(retval != UA_STATUSCODE_GOOD)
-            goto cleanup;
+        UA_CHECK(retval);
     }
-    retval = writeNetworkMessage(wg, retval, msgSize, &nm, &buf);
-
-    if (retval != UA_STATUSCODE_GOOD) {
-        if(msgSize > UA_MAX_STACKBUF)
-            UA_ByteString_clear(&buf);
-        goto cleanup;
-    }
-
+    retval = writeNetworkMessage(wg, msgSize, &nm, &buf);
+    UA_CHECK(retval);
     /* Send the prepared messages */
     retval = connection->channel->send(connection->channel, transportSettings, &buf);
-    if(msgSize > UA_MAX_STACKBUF)
-        UA_ByteString_clear(&buf);
+    UA_CHECK(retval);
 
-cleanup:
+    return UA_STATUSCODE_GOOD;
+
+error:
+
+    // TODO: check if something can go wrong if all these actions are performed after UA_CHECK
+    UA_ByteString_clear(&buf);
     UA_ByteString_clear(&nm.securityHeader.messageNonce);
-    UA_free(nm.payload.dataSetPayload.sizes);
+    if (nm.payload.dataSetPayload.sizes) {
+        UA_free(nm.payload.dataSetPayload.sizes);
+    }
     return retval;
 }
 
@@ -2211,11 +2212,9 @@ void
 UA_WriterGroup_publishCallback(UA_Server *server, UA_WriterGroup *writerGroup) {
     UA_LOG_DEBUG(&server->config.logger, UA_LOGCATEGORY_SERVER, "Publish Callback");
 
-    if(!writerGroup) {
-        UA_LOG_ERROR(&server->config.logger, UA_LOGCATEGORY_SERVER,
-                       "Publish failed. WriterGroup not found");
-        return;
-    }
+    // TODO: review if its okay to force correct value from caller side
+    UA_assert(writerGroup != NULL);
+    UA_assert(server != NULL);
 
     /* Nothing to do? */
     if(writerGroup->writersCount <= 0)
