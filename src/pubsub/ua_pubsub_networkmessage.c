@@ -781,13 +781,11 @@ UA_SecurityHeader_decodeBinary(const UA_ByteString *src, size_t *offset,
             UA_CHECK(rv);
         }
     }
-
     // SecurityFooterSize
     if(dst->securityHeader.securityFooterEnabled) {
         rv = UA_UInt16_decodeBinary(src, offset, &dst->securityHeader.securityFooterSize);
         UA_CHECK(rv);
     }
-
     return UA_STATUSCODE_GOOD;
 error:
     return rv;
@@ -863,9 +861,10 @@ UA_NetworkMessage_decodePayload(const UA_ByteString *src, size_t *offset, UA_Net
     return UA_STATUSCODE_GOOD;
 
 error:
-    if (dst->payload.dataSetPayload.dataSetMessages) {
-        UA_free(dst->payload.dataSetPayload.dataSetMessages);
-    }
+    // TODO: check if making the cleanup code to free allocated memory is better
+    // if (dst->payload.dataSetPayload.dataSetMessages) {
+    //     UA_free(dst->payload.dataSetPayload.dataSetMessages);
+    // }
     return rv;
 }
 
@@ -1116,7 +1115,7 @@ UA_NetworkMessage_clear(UA_NetworkMessage* p) {
             }
         }
 
-        if(p->payload.dataSetPayload.dataSetMessages != NULL) {
+        if(p->payload.dataSetPayload.dataSetMessages) {
             UA_Byte count = 1;
             if(p->payloadHeaderEnabled)
                 count = p->payloadHeader.dataSetPayloadHeader.count;
