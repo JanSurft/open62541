@@ -10,6 +10,13 @@
 #include <open62541/server_config_default.h>
 #include <open62541/server_pubsub.h>
 
+#include "open62541/types_generated_encoding_binary.h"
+
+#include "ua_pubsub.h"
+#include "ua_server_internal.h"
+
+#include <check.h>
+
 #include <mbedtls/aes.h>
 #include <mbedtls/ctr_drbg.h>
 #include <mbedtls/entropy.h>
@@ -20,46 +27,41 @@
 #include <mbedtls/version.h>
 #include <mbedtls/x509_crt.h>
 
-#include "open62541/types_generated_encoding_binary.h"
-
-#include "ua_pubsub.h"
-#include "ua_server_internal.h"
-
-#include <check.h>
-
 #define UA_AES128CTR_SIGNING_KEY_LENGTH 16
 #define UA_AES128CTR_KEY_LENGTH 16
 #define UA_AES128CTR_KEYNONCE_LENGTH 4
-
 
 UA_Byte signingKey[UA_AES128CTR_SIGNING_KEY_LENGTH] = {0};
 UA_Byte encryptingKey[UA_AES128CTR_KEY_LENGTH] = {0};
 UA_Byte keyNonce[UA_AES128CTR_KEYNONCE_LENGTH] = {0};
 UA_Server *server = NULL;
-UA_NodeId wg, connection;
+UA_NodeId readerGroupId, connectionId;
 
-static void setup(void) {
+static void
+setup(void) {
     server = UA_Server_new();
     UA_ServerConfig *config = UA_Server_getConfig(server);
     UA_ServerConfig_setDefault(config);
     UA_ServerConfig_addPubSubTransportLayer(config, UA_PubSubTransportLayerUDPMP());
 
-    config->pubSubConfig.securityPolicies = (UA_PubSubSecurityPolicy*)
-        UA_malloc(sizeof(UA_PubSubSecurityPolicy));
+    config->pubSubConfig.securityPolicies =
+        (UA_PubSubSecurityPolicy *)UA_malloc(sizeof(UA_PubSubSecurityPolicy));
     config->pubSubConfig.securityPoliciesSize = 1;
     UA_PubSubSecurityPolicy_Aes128Ctr(config->pubSubConfig.securityPolicies,
                                       &config->logger);
 
     UA_Server_run_startup(server);
-    //add 2 connections
+    // add 2 connections
     UA_PubSubConnectionConfig connectionConfig;
     memset(&connectionConfig, 0, sizeof(UA_PubSubConnectionConfig));
     connectionConfig.name = UA_STRING("UADP Connection");
-    UA_NetworkAddressUrlDataType networkAddressUrl = {UA_STRING_NULL, UA_STRING("opc.udp://224.0.0.22:4840/")};
+    UA_NetworkAddressUrlDataType networkAddressUrl = {
+        UA_STRING_NULL, UA_STRING("opc.udp://224.0.0.22:4840/")};
     UA_Variant_setScalar(&connectionConfig.address, &networkAddressUrl,
                          &UA_TYPES[UA_TYPES_NETWORKADDRESSURLDATATYPE]);
-    connectionConfig.transportProfileUri = UA_STRING("http://opcfoundation.org/UA-Profile/Transport/pubsub-udp-uadp");
-    UA_Server_addPubSubConnection(server, &connectionConfig, &connection);
+    connectionConfig.transportProfileUri =
+        UA_STRING("http://opcfoundation.org/UA-Profile/Transport/pubsub-udp-uadp");
+    UA_Server_addPubSubConnection(server, &connectionConfig, &connectionId);
 }
 
 static void
@@ -80,54 +82,44 @@ hexstr_to_char(const char *hexstr) {
 }
 START_TEST(SingleSubscribedDataSetField) {
 
-        UA_ServerConfig *config = UA_Server_getConfig(server);
+    UA_ServerConfig *config = UA_Server_getConfig(server);
 
-        UA_WriterGroupConfig writerGroupConfig;
-        memset(&writerGroupConfig, 0, sizeof(writerGroupConfig));
-        writerGroupConfig.name = UA_STRING("WriterGroup 1");
-        writerGroupConfig.publishingInterval = 10;
-        writerGroupConfig.encodingMimeType = UA_PUBSUB_ENCODING_UADP;
+    UA_ReaderGroupConfig readerGroupConfig;
+    memset(&readerGroupConfig, 0, sizeof(readerGroupConfig));
+    readerGroupConfig.name = UA_STRING("ReaderGroup");
 
-        writerGroupConfig.securityMode = UA_MESSAGESECURITYMODE_SIGNANDENCRYPT;
-        writerGroupConfig.securityPolicy = &config->pubSubConfig.securityPolicies[0];
+    readerGroupConfig.securityMode = UA_MESSAGESECURITYMODE_SIGNANDENCRYPT;
+    readerGroupConfig.securityPolicy = &config->pubSubConfig.securityPolicies[0];
 
-        UA_Server_addWriterGroup(server, connection, &writerGroupConfig, &wg);
-        UA_Server_setWriterGroupOperational(server, wg);
+    UA_ByteString sk = {UA_AES128CTR_SIGNING_KEY_LENGTH, signingKey};
+    UA_ByteString ek = {UA_AES128CTR_KEY_LENGTH, encryptingKey};
+    UA_ByteString kn = {UA_AES128CTR_KEYNONCE_LENGTH, keyNonce};
 
+    UA_Server_addReaderGroup(server, connectionId, &readerGroupConfig, &readerGroupId);
+    UA_Server_setReaderGroupEncryptionKeys(server, readerGroupId, 1, sk, ek, kn);
+    UA_Server_setReaderGroupOperational(server, readerGroupId);
 
-        UA_ByteString buffer;
+    UA_ByteString buffer;
     buffer.length = 85;
     buffer.data =
         hexstr_to_char("f111ba08016400014df4030100000008b02d012e01000000da434ce02ee19922c"
                        "6e916c8154123baa25f67288e3378d613f32039096e08a9ff14b83ea2247792ee"
                        "ffc757c85ac99c0ffa79e4fbe5629783dc77b403");
-    UA_Logger logger;
+    UA_Logger *logger = &server->config.logger;
     UA_NetworkMessage msg;
     memset(&msg, 0, sizeof(UA_NetworkMessage));
 
-    UA_PubSubSecurityPolicy *policy =
-        (UA_PubSubSecurityPolicy *)UA_malloc(sizeof(UA_PubSubSecurityPolicy));
-    UA_PubSubSecurityPolicy_Aes128Ctr(policy, &logger);
-    UA_ByteString sk = {UA_AES128CTR_SIGNING_KEY_LENGTH, signingKey};
-    UA_ByteString ek = {UA_AES128CTR_KEY_LENGTH, encryptingKey};
-    UA_ByteString kn = {UA_AES128CTR_KEYNONCE_LENGTH, keyNonce};
-
-    UA_Server_setWriterGroupEncryptionKeys(server, wg, 1, sk, ek, kn);
-
-    void **channelContext = (void **)calloc(1, 56);
-
-    policy->newContext(policy->policyContext, &sk, &ek, &kn, channelContext);
-
-    UA_MessageSecurityMode securityMode = UA_MESSAGESECURITYMODE_SIGNANDENCRYPT;
     size_t currentPosition = 0;
 
-    UA_WriterGroup *rg = UA_WriterGroup_findWGbyId(server, wg);
+    UA_ReaderGroup *rg = UA_ReaderGroup_findRGbyId(server, readerGroupId);
     readNetworkMessage(
-        &logger, securityMode, &buffer, &currentPosition, &msg, channelContext,
+        logger, rg->config.securityMode, &buffer, &currentPosition, &msg, rg->securityPolicyContext,
         rg->config.securityPolicy->setMessageNonce,
-        rg->config.securityPolicy->symmetricModule.cryptoModule.signatureAlgorithm.getLocalSignatureSize,
+        rg->config.securityPolicy->symmetricModule.cryptoModule.signatureAlgorithm
+            .getLocalSignatureSize,
         rg->config.securityPolicy->symmetricModule.cryptoModule.signatureAlgorithm.verify,
-        rg->config.securityPolicy->symmetricModule.cryptoModule.encryptionAlgorithm.decrypt);
+        rg->config.securityPolicy->symmetricModule.cryptoModule.encryptionAlgorithm
+            .decrypt);
 }
 END_TEST
 
