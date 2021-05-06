@@ -77,8 +77,7 @@ UA_UInt16 addNamespace(UA_Server *server, const UA_String name) {
 
     /* Copy the namespace string */
     UA_StatusCode retval = UA_String_copy(&name, &server->namespaces[server->namespacesSize]);
-    if(retval != UA_STATUSCODE_GOOD)
-        return 0;
+    UA_CHECK(retval, return 0);
 
     /* Announce the change (otherwise, the array appears unchanged) */
     ++server->namespacesSize;
@@ -139,20 +138,16 @@ UA_Server_forEachChildNodeCall(UA_Server *server, UA_NodeId parentNodeId,
 
     UA_BrowseResult br = UA_Server_browse(server, 0, &bd);
     UA_StatusCode res = br.statusCode;
-    if(res != UA_STATUSCODE_GOOD) {
-        UA_BrowseResult_clear(&br);
-        return res;
-    }
+    UA_CHECK(res, goto cleanup);
 
     for(size_t i = 0; i < br.referencesSize; i++) {
         if(!UA_ExpandedNodeId_isLocal(&br.references[i].nodeId))
             continue;
         res = callback(br.references[i].nodeId.nodeId, !br.references[i].isForward,
                        br.references[i].referenceTypeId, handle);
-        if(res != UA_STATUSCODE_GOOD)
-            break;
+        UA_CHECK(res, goto cleanup);
     }
-
+cleanup:
     UA_BrowseResult_clear(&br);
     return res;
 }
@@ -312,8 +307,7 @@ UA_Server_init(UA_Server *server) {
 
     /* Initialize namespace 0*/
     res = UA_Server_initNS0(server);
-    if(res != UA_STATUSCODE_GOOD)
-        goto cleanup;
+    UA_CHECK(res, goto cleanup);
 
 #ifdef UA_ENABLE_PUBSUB
     /* Build PubSub information model */
@@ -339,14 +333,11 @@ UA_Server *
 UA_Server_newWithConfig(UA_ServerConfig *config) {
     if(!config)
         return NULL;
+
     UA_Server *server = (UA_Server *)UA_calloc(1, sizeof(UA_Server));
-    if(!server) {
-        UA_ServerConfig_clean(config);
-        return NULL;
-    }
+    UA_CHECK_MEM(server, goto error);
+
     server->config = *config;
-
-
     /* The config might have been "moved" into the server struct. Ensure that
      * the logger pointer is correct. */
     for(size_t i = 0; i < server->config.securityPoliciesSize; i++)
@@ -355,6 +346,10 @@ UA_Server_newWithConfig(UA_ServerConfig *config) {
     /* Reset the old config */
     memset(config, 0, sizeof(UA_ServerConfig));
     return UA_Server_init(server);
+
+error:
+    UA_ServerConfig_clean(config);
+    return NULL;
 }
 
 /* Returns if the server should be shut down immediately */
@@ -512,16 +507,14 @@ verifyServerApplicationURI(const UA_Server *server) {
             verifyApplicationURI(server->config.certificateVerification.context,
                                  &sp->localCertificate,
                                  &server->config.applicationDescription.applicationUri);
-        if(retval != UA_STATUSCODE_GOOD) {
-            UA_LOG_ERROR(&server->config.logger, UA_LOGCATEGORY_SERVER,
-                         "The configured ApplicationURI \"%.*s\"does not match the "
-                         "ApplicationURI specified in the certificate for the "
-                         "SecurityPolicy %.*s",
-                         (int)server->config.applicationDescription.applicationUri.length,
-                         server->config.applicationDescription.applicationUri.data,
-                         (int)sp->policyUri.length, sp->policyUri.data);
-            return retval;
-        }
+
+        UA_CHECK_ERROR(retval, return retval, &server->config.logger, UA_LOGCATEGORY_SERVER,
+                       "The configured ApplicationURI \"%.*s\"does not match the "
+                       "ApplicationURI specified in the certificate for the "
+                       "SecurityPolicy %.*s",
+                       (int)server->config.applicationDescription.applicationUri.length,
+                       server->config.applicationDescription.applicationUri.data,
+                       (int)sp->policyUri.length, sp->policyUri.data);
     }
     return UA_STATUSCODE_GOOD;
 }
@@ -565,8 +558,7 @@ UA_Server_run_startup(UA_Server *server) {
         writeNs0VariableArray(server, UA_NS0ID_SERVER_SERVERARRAY,
                               &server->config.applicationDescription.applicationUri,
                               1, &UA_TYPES[UA_TYPES_STRING]);
-    if(retVal != UA_STATUSCODE_GOOD)
-        return retVal;
+    UA_CHECK(retVal, return retVal);
 
     if(server->state > UA_SERVERLIFECYCLE_FRESH)
         return UA_STATUSCODE_GOOD;
@@ -585,8 +577,7 @@ UA_Server_run_startup(UA_Server *server) {
     /* Does the ApplicationURI match the local certificates? */
 #ifdef UA_ENABLE_ENCRYPTION
     retVal = verifyServerApplicationURI(server);
-    if(retVal != UA_STATUSCODE_GOOD)
-        return retVal;
+    UA_CHECK(retVal, return retVal);
 #endif
 
     /* Sample the start time and set it to the Server object */
@@ -605,8 +596,7 @@ UA_Server_run_startup(UA_Server *server) {
         nl->statistics = &server->serverStats.ns;
         result |= nl->start(nl, &server->config.logger, &server->config.customHostname);
     }
-    if(result != UA_STATUSCODE_GOOD)
-        return result;
+    UA_CHECK(result, return result);
 
     /* Update the application description to match the previously added
      * discovery urls. We can only do this after the network layer is started
@@ -736,8 +726,8 @@ testShutdownCondition(UA_Server *server) {
 UA_StatusCode
 UA_Server_run(UA_Server *server, const volatile UA_Boolean *running) {
     UA_StatusCode retval = UA_Server_run_startup(server);
-    if(retval != UA_STATUSCODE_GOOD)
-        return retval;
+    UA_CHECK(retval, return retval);
+
 #ifdef UA_ENABLE_VALGRIND_INTERACTIVE
     size_t loopCount = 0;
 #endif
