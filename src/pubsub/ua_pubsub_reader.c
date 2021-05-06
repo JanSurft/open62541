@@ -456,7 +456,8 @@ UA_ReaderGroupConfig_clear(UA_ReaderGroupConfig *readerGroupConfig) {
 static void
 UA_Server_ReaderGroup_clear(UA_Server* server, UA_ReaderGroup *readerGroup) {
     UA_ReaderGroupConfig_clear(&readerGroup->config);
-    UA_DataSetReader *dataSetReader, *tmpDataSetReader;
+    UA_DataSetReader *dataSetReader;
+    UA_DataSetReader *tmpDataSetReader;
     LIST_FOREACH_SAFE(dataSetReader, &readerGroup->readers, listEntry, tmpDataSetReader) {
         UA_Server_removeDataSetReader(server, dataSetReader->identifier);
     }
@@ -985,17 +986,17 @@ verifyAndDecrypt(const UA_Logger *logger,
                  UA_StatusCode (*decrypt)(void *, UA_ByteString *)
 ) {
     size_t sigSize = 0;
-    UA_StatusCode retval = UA_STATUSCODE_GOOD;
+    UA_StatusCode rv = UA_STATUSCODE_GOOD;
 
     UA_Boolean doValidate = false;
     UA_Boolean doDecrypt= false;
 
-    retval = needsValidation(logger, currentNetworkMessage, securityMode, &doValidate);
-    UA_CHECK_ERROR(retval, logger, UA_LOGCATEGORY_SECURITYPOLICY,
+    rv = needsValidation(logger, currentNetworkMessage, securityMode, &doValidate);
+    UA_CHECK_WARN(rv, return rv, logger, UA_LOGCATEGORY_SECURITYPOLICY,
                    "PubSub receive. Validation security mode error");
 
-    retval = needsDecryption(logger, currentNetworkMessage, securityMode, &doDecrypt);
-    UA_CHECK_ERROR(retval, logger, UA_LOGCATEGORY_SECURITYPOLICY
+    rv = needsDecryption(logger, currentNetworkMessage, securityMode, &doDecrypt);
+    UA_CHECK_WARN(rv, return rv, logger, UA_LOGCATEGORY_SECURITYPOLICY
                    ,"PubSub receive. Decryption security mode error");
 
     if (doValidate) {
@@ -1004,8 +1005,8 @@ verifyAndDecrypt(const UA_Logger *logger,
         UA_ByteString toBeVerified = {buffer->length - sigSize, buffer->data};
         UA_ByteString signature = {sigSize, buffer->data + buffer->length - sigSize};
 
-        retval = verify(channelContext, &toBeVerified, &signature);
-        UA_CHECK_ERROR(retval, logger, UA_LOGCATEGORY_SECURITYPOLICY,
+        rv = verify(channelContext, &toBeVerified, &signature);
+        UA_CHECK_WARN(rv, return rv, logger, UA_LOGCATEGORY_SECURITYPOLICY,
                        "PubSub receive. Signature invalid");
 
         UA_LOG_DEBUG(logger, UA_LOGCATEGORY_SECURITYPOLICY,
@@ -1015,53 +1016,53 @@ verifyAndDecrypt(const UA_Logger *logger,
 
     if (doDecrypt) {
 
-        retval = setNonce(channelContext,
+        rv = setNonce(channelContext,
                               &currentNetworkMessage->securityHeader.messageNonce);
-        UA_CHECK_ERROR(retval, logger, UA_LOGCATEGORY_SECURITYPOLICY,
+        UA_CHECK_WARN(rv, return rv, logger, UA_LOGCATEGORY_SECURITYPOLICY,
                        "PubSub receive. Faulty Nonce set");
 
         UA_ByteString toBeDecrypted =
             {buffer->length - *currentPosition,
              buffer->data + *currentPosition};
-        retval = decrypt(channelContext, &toBeDecrypted);
-        UA_CHECK_ERROR(retval, logger, UA_LOGCATEGORY_SECURITYPOLICY,
+        rv = decrypt(channelContext, &toBeDecrypted);
+        UA_CHECK_WARN(rv, return rv, logger, UA_LOGCATEGORY_SECURITYPOLICY,
                      "PubSub receive. Faulty Decryption")
     }
     return UA_STATUSCODE_GOOD;
-error:
-    return retval;
 }
 
 UA_StatusCode
 readNetworkMessage(const UA_Logger *logger, UA_MessageSecurityMode securityMode,
-                       UA_ByteString *buffer, size_t *currentPosition,
-                       UA_NetworkMessage *currentNetworkMessage,
-                       void *channelContext,
-                       UA_StatusCode (*setNonce)(void *,const UA_ByteString *),
-                       size_t (*getSignatureSize)(const void *),
-                       UA_StatusCode (*verify)(void *,const UA_ByteString *,const UA_ByteString *),
-                       UA_StatusCode (*decrypt)(void *, UA_ByteString *)
-                   ) {
+                   UA_ByteString *buffer, size_t *currentPosition,
+                   UA_NetworkMessage *currentNetworkMessage, void *channelContext,
+                   UA_StatusCode (*setNonce)(void *, const UA_ByteString *),
+                   size_t (*getSignatureSize)(const void *),
+                   UA_StatusCode (*verify)(void *, const UA_ByteString *,
+                                           const UA_ByteString *),
+                   UA_StatusCode (*decrypt)(void *, UA_ByteString *)) {
 
-    UA_StatusCode res = UA_NetworkMessage_decodeHeaders(buffer, currentPosition, currentNetworkMessage);
-    UA_CHECK_ERROR(res, logger, UA_LOGCATEGORY_SERVER, "PubSub receive. decoding headers failed");
+    UA_StatusCode rv =
+        UA_NetworkMessage_decodeHeaders(buffer, currentPosition, currentNetworkMessage);
+    UA_CHECK_ERROR(rv, return rv, logger, UA_LOGCATEGORY_SERVER,
+                   "PubSub receive. decoding headers failed");
 
 #ifdef UA_ENABLE_PUBSUB_ENCRYPTION
-    res = verifyAndDecrypt(logger, securityMode, buffer, currentPosition, currentNetworkMessage,
-                           channelContext,
-                           setNonce, getSignatureSize, verify, decrypt);
-    UA_CHECK_ERROR(res, logger, UA_LOGCATEGORY_SERVER, "PubSub receive. verify and decrypt failed");
+    rv = verifyAndDecrypt(logger, securityMode, buffer, currentPosition,
+                          currentNetworkMessage, channelContext, setNonce,
+                          getSignatureSize, verify, decrypt);
+    UA_CHECK_ERROR(rv, return rv, logger, UA_LOGCATEGORY_SERVER,
+                   "PubSub receive. verify and decrypt failed");
 #endif
 
-    res = UA_NetworkMessage_decodePayload(buffer, currentPosition, currentNetworkMessage);
-    UA_CHECK_ERROR(res, logger, UA_LOGCATEGORY_SERVER, "PubSub receive. decoding payload failed");
+    rv = UA_NetworkMessage_decodePayload(buffer, currentPosition, currentNetworkMessage);
+    UA_CHECK_ERROR(rv, return rv, logger, UA_LOGCATEGORY_SERVER,
+                   "PubSub receive. decoding payload failed");
 
-    res = UA_NetworkMessage_decodeFooters(buffer, currentPosition, currentNetworkMessage);
-    UA_CHECK_ERROR(res, logger, UA_LOGCATEGORY_SERVER, "PubSub receive. decoding footers failed");
+    rv = UA_NetworkMessage_decodeFooters(buffer, currentPosition, currentNetworkMessage);
+    UA_CHECK_ERROR(rv, return rv, logger, UA_LOGCATEGORY_SERVER,
+                   "PubSub receive. decoding footers failed");
 
     return UA_STATUSCODE_GOOD;
-error:
-    return res;
 }
 
 static
@@ -1073,7 +1074,7 @@ receiveNetworkMessage(UA_Server *server, UA_ReaderGroup *readerGroup,
     UA_NetworkMessage currentNetworkMessage;
     memset(&currentNetworkMessage, 0, sizeof(UA_NetworkMessage));
 
-    UA_StatusCode res =
+    UA_StatusCode rv =
         readNetworkMessage(&server->config.logger,
                            readerGroup->config.securityMode,
                            buffer,
@@ -1089,15 +1090,14 @@ receiveNetworkMessage(UA_Server *server, UA_ReaderGroup *readerGroup,
                            readerGroup->config.securityPolicy->symmetricModule
                                .cryptoModule.encryptionAlgorithm.decrypt
                            );
-
-    UA_CHECK_ERROR(res, &server->config.logger, UA_LOGCATEGORY_SERVER,
+    UA_CHECK_WARN(rv, goto error, &server->config.logger, UA_LOGCATEGORY_SERVER,
                    "Subscribe failed. receive network message failed.");
 
     /* TODO: We already know the ReaderGroup at this point. Now we loose that
     * information. There is only one place where
     * UA_PubSubConnection_processNetworkMessage is used. */
-    res = UA_PubSubConnection_processNetworkMessage(server, connection, &currentNetworkMessage);
-    UA_CHECK_ERROR(res, &server->config.logger, UA_LOGCATEGORY_SERVER,
+    rv = UA_PubSubConnection_processNetworkMessage(server, connection, &currentNetworkMessage);
+    UA_CHECK_WARN(rv, goto error, &server->config.logger, UA_LOGCATEGORY_SERVER,
                    "Subscribe failed. process network message failed.");
     UA_NetworkMessage_clear(&currentNetworkMessage);
 
@@ -1116,7 +1116,7 @@ receiveNetworkMessage(UA_Server *server, UA_ReaderGroup *readerGroup,
 
 error:
     UA_NetworkMessage_clear(&currentNetworkMessage);
-    return res;
+    return rv;
 }
 
 static
@@ -1200,34 +1200,38 @@ receiveBufferedNetworkMessage(UA_Server *server, UA_ReaderGroup *readerGroup,
     buffer.length = RECEIVE_MSG_BUFFER_SIZE;
     buffer.data = ReceiveMsgBuffer;
 
-    UA_StatusCode res = connection->channel->receive(connection->channel, &buffer, NULL, readerGroup->config.timeout);
-    UA_CHECK_ERROR(res, &server->config.logger, UA_LOGCATEGORY_SERVER, "SubscribeCallback(): Connection receive failed!");
+    UA_StatusCode rv = connection->channel->receive(connection->channel, &buffer, NULL, readerGroup->config.timeout);
 
+    // TODO: here rv is ok if UA_STATUSCODE_GOOD != rv
+    // if (UA_StatusCode_isBad(rv)) {
+        UA_CHECK_WARN(rv, goto error, &server->config.logger, UA_LOGCATEGORY_SERVER, "SubscribeCallback(): Connection receive failed!");
+    // }
     if(buffer.length > 0) {
         size_t currentPosition = 0;
         size_t previousPosition = 0;
         if (readerGroup->config.rtLevel == UA_PUBSUB_RT_FIXED_SIZE) {
             do {
-                res = receiveNetworkMessageRT(server, readerGroup, connection, previousPosition, &buffer, &currentPosition);
-                UA_CHECK_ERROR(res, &server->config.logger, UA_LOGCATEGORY_SERVER, "SubscribeCallback(): receive message failed");
+                rv = receiveNetworkMessageRT(server, readerGroup, connection, previousPosition, &buffer, &currentPosition);
+                UA_CHECK_WARN(rv, goto error, &server->config.logger, UA_LOGCATEGORY_SERVER, "SubscribeCallback(): receive message failed");
             } while((buffer.length) > currentPosition);
         } else {
             UA_LOG_DEBUG(&server->config.logger, UA_LOGCATEGORY_USERLAND, "Message received:");
             do {
-                res = receiveNetworkMessage(server, readerGroup, connection, previousPosition, &buffer, &currentPosition);
-                UA_CHECK_ERROR(res, &server->config.logger, UA_LOGCATEGORY_SERVER, "SubscribeCallback(): receive message failed");
+                rv = receiveNetworkMessage(server, readerGroup, connection, previousPosition, &buffer, &currentPosition);
+                UA_CHECK_WARN(rv, goto error, &server->config.logger, UA_LOGCATEGORY_SERVER, "SubscribeCallback(): receive message failed");
             } while((buffer.length) > currentPosition);
         }
     }
     return UA_STATUSCODE_GOOD;
 error:
     UA_ByteString_clear(&buffer);
-    return res;
+    return rv;
 }
 /* This callback triggers the collection and reception of NetworkMessages and the
  * contained DataSetMessages. */
 void UA_ReaderGroup_subscribeCallback(UA_Server *server, UA_ReaderGroup *readerGroup) {
 
+    // TODO: feedback for debug-assert vs runtime-check
     UA_assert(server);
     UA_assert(readerGroup);
 
@@ -1242,7 +1246,6 @@ void UA_ReaderGroup_subscribeCallback(UA_Server *server, UA_ReaderGroup *readerG
     }
 
     receiveBufferedNetworkMessage(server, readerGroup, connection);
-
     return;
 
 error:

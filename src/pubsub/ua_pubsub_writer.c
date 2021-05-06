@@ -2090,14 +2090,14 @@ encryptAndSign(UA_WriterGroup *wg, const UA_NetworkMessage *nm,
     if(nm->securityHeader.networkMessageEncrypted) {
         /* Set the temporary MessageNonce in the SecurityPolicy */
         rv = wg->config.securityPolicy->setMessageNonce(channelContext, &nm->securityHeader.messageNonce);
-        UA_CHECK(rv);
+        UA_CHECK(rv, return rv);
 
         /* The encryption is done in-place, no need to encode again */
         UA_ByteString toBeEncrypted = {(uintptr_t)footerEnd - (uintptr_t)payloadStart,
                                        payloadStart};
         rv = wg->config.securityPolicy->symmetricModule.cryptoModule.encryptionAlgorithm
             .encrypt(channelContext, &toBeEncrypted);
-        UA_CHECK(rv);
+        UA_CHECK(rv, return rv);
     }
 
     if(nm->securityHeader.networkMessageSigned) {
@@ -2110,12 +2110,9 @@ encryptAndSign(UA_WriterGroup *wg, const UA_NetworkMessage *nm,
 
         rv = wg->config.securityPolicy->symmetricModule.cryptoModule.
             signatureAlgorithm.sign(channelContext, &toBeSigned, &signature);
-        UA_CHECK(rv);
+        UA_CHECK(rv, return rv);
     }
     return UA_STATUSCODE_GOOD;
-
-error:
-    return rv;
 }
 
 static UA_StatusCode
@@ -2126,30 +2123,27 @@ writeNetworkMessage(UA_WriterGroup *wg, size_t msgSize,
     UA_Byte *bufEnd = &buf->data[buf->length];
 
     UA_Byte *networkMessageStart = bufPos;
-    UA_StatusCode retval = UA_NetworkMessage_encodeHeaders(nm, &bufPos, bufEnd);
-    UA_CHECK(retval);
+    UA_StatusCode rv = UA_NetworkMessage_encodeHeaders(nm, &bufPos, bufEnd);
+    UA_CHECK(rv, return rv);
 
     UA_Byte *payloadStart = bufPos;
-    retval = UA_NetworkMessage_encodePayload(nm, &bufPos, bufEnd);
-    UA_CHECK(retval);
+    rv = UA_NetworkMessage_encodePayload(nm, &bufPos, bufEnd);
+    UA_CHECK(rv, return rv);
     UA_Byte *payloadEnd = bufPos;
 
     UA_Byte *footerStart = bufPos;
-    retval = UA_NetworkMessage_encodeFooters(nm, &bufPos, bufEnd);
-    UA_CHECK(retval);
+    rv = UA_NetworkMessage_encodeFooters(nm, &bufPos, bufEnd);
+    UA_CHECK(rv, return rv);
     UA_Byte *footerEnd = bufPos;
 
     /* Encrypt and Sign the message */
 #ifdef UA_ENABLE_PUBSUB_ENCRYPTION
 
-    retval = encryptAndSign(wg, nm, networkMessageStart, payloadStart, footerEnd);
-    UA_CHECK(retval);
+    rv = encryptAndSign(wg, nm, networkMessageStart, payloadStart, footerEnd);
+    UA_CHECK(rv, return rv);
 
 #endif
     return UA_STATUSCODE_GOOD;
-
-error:
-    return retval;
 }
 static UA_StatusCode
 sendNetworkMessage(UA_PubSubConnection *connection, UA_WriterGroup *wg,
@@ -2159,10 +2153,10 @@ sendNetworkMessage(UA_PubSubConnection *connection, UA_WriterGroup *wg,
     UA_NetworkMessage nm;
     memset(&nm, 0, sizeof(UA_NetworkMessage));
 
-    UA_StatusCode retval =
+    UA_StatusCode rv =
         generateNetworkMessage(connection, wg, dsm, writerIds, dsmCount,
                                messageSettings, transportSettings, &nm);
-    UA_CHECK(retval);
+    UA_CHECK(rv, return rv);
 
     /* Allocate the buffer. Allocate on the stack if the buffer is small. */
     UA_ByteString buf;
@@ -2184,14 +2178,14 @@ sendNetworkMessage(UA_PubSubConnection *connection, UA_WriterGroup *wg,
         buf.data = stackBuf;
         buf.length = msgSize;
     } else {
-        retval = UA_ByteString_allocBuffer(&buf, msgSize);
-        UA_CHECK(retval);
+        rv = UA_ByteString_allocBuffer(&buf, msgSize);
+        UA_CHECK(rv, goto error);
     }
-    retval = writeNetworkMessage(wg, msgSize, &nm, &buf);
-    UA_CHECK(retval);
+    rv = writeNetworkMessage(wg, msgSize, &nm, &buf);
+    UA_CHECK(rv, goto error);
     /* Send the prepared messages */
-    retval = connection->channel->send(connection->channel, transportSettings, &buf);
-    UA_CHECK(retval);
+    rv = connection->channel->send(connection->channel, transportSettings, &buf);
+    UA_CHECK(rv, goto error);
 
     return UA_STATUSCODE_GOOD;
 
@@ -2203,7 +2197,7 @@ error:
     if (nm.payload.dataSetPayload.sizes) {
         UA_free(nm.payload.dataSetPayload.sizes);
     }
-    return retval;
+    return rv;
 }
 
 /* This callback triggers the collection and publish of NetworkMessages and the
