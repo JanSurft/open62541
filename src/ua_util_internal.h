@@ -9,6 +9,7 @@
  *    Copyright 2015 (c) Chris Iatrou
  *    Copyright 2015-2016 (c) Oleksiy Vasylyev
  *    Copyright 2017 (c) Stefan Profanter, fortiss GmbH
+ *    Copyright 2021 (c) Fraunhofer IOSB (Author: Jan Hermes)
  */
 
 #ifndef UA_UTIL_H_
