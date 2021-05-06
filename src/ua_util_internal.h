@@ -101,12 +101,24 @@ typedef UA_StatusCode status;
 
 #define UA_CHECK_LOG(STATUS_CODE, EVAL, LEVEL, LOGGER, CAT, ...) \
     UA_CHECK_LOG_INTERNAL(STATUS_CODE, EVAL, UA_LOG_##LEVEL, LOGGER, CAT, ##__VA_ARGS__)
+
+/**
+ * Check Macros
+ * Usage examples:
+ *
+ *    UA_StatusCode rv = some_func(...);
+ *    UA_CHECK(rv, return rv);
+ *
+ *    UA_Logger *logger = &server->config.logger;
+ *    rv = bar_func(...);
+ *    UA_CHECK_WARN(rv, return rv, logger, UA_LOGCATEGORY_SERVER, "msg & args %s", "arg");
+ */
 #define UA_CHECK_ERROR(STATUS_CODE, EVAL, LOGGER, CAT, ...) UA_CHECK_LOG( \
     STATUS_CODE, EVAL, ERROR, LOGGER, CAT, ##__VA_ARGS__, "")
 #define UA_CHECK_WARN(STATUS_CODE, EVAL, LOGGER, CAT, ...) UA_CHECK_LOG( \
     STATUS_CODE, EVAL, WARNING, LOGGER, CAT, ##__VA_ARGS__, "")
 #define UA_CHECK_INFO(STATUS_CODE, EVAL, LOGGER, CAT, ...) UA_CHECK_LOG( \
-    STATUS_CODE, EVAL, INFO, LOGGER, CAT, ##__VA_ARGS__)
+    STATUS_CODE, EVAL, INFO, LOGGER, CAT, ##__VA_ARGS__, "")
 
 #define UA_CHECK_MEM(A, EVAL_ON_ERROR) if(!(A)) { EVAL_ON_ERROR; }
 
