@@ -15,6 +15,7 @@
  *    Copyright 2017 (c) Mark Giraud, Fraunhofer IOSB
  *    Copyright 2018 (c) Hilscher Gesellschaft für Systemautomation mbH (Author: Martin Lang)
  *    Copyright 2019 (c) Kalycito Infotech Private Limited
+ *    Copyright 2021 (c) Fraunhofer IOSB (Author: Jan Hermes)
  */
 
 #include "ua_server_internal.h"
