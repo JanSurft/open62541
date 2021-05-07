@@ -91,20 +91,20 @@ typedef UA_StatusCode status;
  * Error checking macros
  */
 
-#define UA_CHECK(STATUS_CODE, EVAL_ON_ERROR)                                             \
-    if((STATUS_CODE) != UA_STATUSCODE_GOOD) {                                            \
+#define UA_CHECK(STATUSCODE, EVAL_ON_ERROR)                                              \
+    if((STATUSCODE) != UA_STATUSCODE_GOOD) {                                             \
         EVAL_ON_ERROR;                                                                   \
     }
 
-#define UA_CHECK_LOG_INTERNAL(STATUS_CODE, EVAL, LOG, LOGGER, CAT, MSG, ...)             \
+#define UA_CHECK_LOG_INTERNAL(STATUSCODE, EVAL, LOG, LOGGER, CAT, MSG, ...)              \
     UA_MACRO_EXPAND(UA_CHECK(                                                            \
-        STATUS_CODE, LOG(LOGGER, CAT, "" MSG "%s (%s:%d: status-code: %s)", __VA_ARGS__, \
-                         __FILE__, __LINE__, UA_StatusCode_name(STATUS_CODE));           \
+        STATUSCODE, LOG(LOGGER, CAT, "" MSG "%s (%s:%d: statuscode: %s)", __VA_ARGS__,   \
+                        __FILE__, __LINE__, UA_StatusCode_name(STATUSCODE));             \
         EVAL))
 
-#define UA_CHECK_LOG(STATUS_CODE, EVAL, LEVEL, LOGGER, CAT, ...)                         \
-    UA_MACRO_EXPAND(UA_CHECK_LOG_INTERNAL(STATUS_CODE, EVAL, UA_LOG_##LEVEL, LOGGER,     \
-                                          CAT, __VA_ARGS__))
+#define UA_CHECK_LOG(STATUSCODE, EVAL, LEVEL, LOGGER, CAT, ...)                          \
+    UA_MACRO_EXPAND(UA_CHECK_LOG_INTERNAL(STATUSCODE, EVAL, UA_LOG_##LEVEL, LOGGER, CAT, \
+                                          __VA_ARGS__))
 
 /**
  * Check Macros
@@ -117,12 +117,12 @@ typedef UA_StatusCode status;
  *    rv = bar_func(...);
  *    UA_CHECK_WARN(rv, return rv, logger, UA_LOGCATEGORY_SERVER, "msg & args %s", "arg");
  */
-#define UA_CHECK_ERROR(STATUS_CODE, EVAL, LOGGER, CAT, ...)                              \
-    UA_CHECK_LOG(STATUS_CODE, EVAL, ERROR, LOGGER, CAT, ##__VA_ARGS__, "")
-#define UA_CHECK_WARN(STATUS_CODE, EVAL, LOGGER, CAT, ...)                               \
-    UA_CHECK_LOG(STATUS_CODE, EVAL, WARNING, LOGGER, CAT, ##__VA_ARGS__, "")
-#define UA_CHECK_INFO(STATUS_CODE, EVAL, LOGGER, CAT, ...)                               \
-    UA_CHECK_LOG(STATUS_CODE, EVAL, INFO, LOGGER, CAT, ##__VA_ARGS__, "")
+#define UA_CHECK_ERROR(STATUSCODE, EVAL, LOGGER, CAT, ...)                               \
+    UA_CHECK_LOG(STATUSCODE, EVAL, ERROR, LOGGER, CAT, ##__VA_ARGS__, "")
+#define UA_CHECK_WARN(STATUSCODE, EVAL, LOGGER, CAT, ...)                                \
+    UA_CHECK_LOG(STATUSCODE, EVAL, WARNING, LOGGER, CAT, ##__VA_ARGS__, "")
+#define UA_CHECK_INFO(STATUSCODE, EVAL, LOGGER, CAT, ...)                                \
+    UA_CHECK_LOG(STATUSCODE, EVAL, INFO, LOGGER, CAT, ##__VA_ARGS__, "")
 
 #define UA_CHECK_MEM(A, EVAL_ON_ERROR)                                                   \
     if(!(A)) {                                                                           \
