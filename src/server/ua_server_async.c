@@ -23,26 +23,24 @@ UA_AsyncManager_sendAsyncResponse(UA_AsyncManager *am, UA_Server *server,
                                   UA_AsyncResponse *ar) {
     /* Get the session */
     UA_StatusCode res = UA_STATUSCODE_GOOD;
+
+    UA_SecureChannel* channel = NULL;
+    UA_ResponseHeader *responseHeader = NULL;
+
     UA_LOCK(&server->serviceMutex);
     UA_Session* session = UA_Server_getSessionById(server, &ar->sessionId);
     UA_UNLOCK(&server->serviceMutex);
-    UA_SecureChannel* channel = NULL;
-    UA_ResponseHeader *responseHeader = NULL;
-    if(!session) {
-        res = UA_STATUSCODE_BADSESSIONIDINVALID;
-        UA_LOG_WARNING(&server->config.logger, UA_LOGCATEGORY_SERVER,
-                       "UA_Server_InsertMethodResponse: Session is gone");
-        goto clean_up;
-    }
+    UA_CHECK_WARN(session,
+                  res = UA_STATUSCODE_BADSESSIONIDINVALID; goto cleanup,
+                  &server->config.logger, UA_LOGCATEGORY_SERVER,
+                  "UA_Server_InsertMethodResponse: Session is gone");
 
     /* Check the channel */
     channel = session->header.channel;
-    if(!channel) {
-        res = UA_STATUSCODE_BADSECURECHANNELCLOSED;
-        UA_LOG_WARNING(&server->config.logger, UA_LOGCATEGORY_SERVER,
-                       "UA_Server_InsertMethodResponse: Channel is gone");
-        goto clean_up;
-    }
+    UA_CHECK_WARN(channel,
+                  res = UA_STATUSCODE_BADSECURECHANNELCLOSED; goto cleanup,
+                  &server->config.logger, UA_LOGCATEGORY_SERVER,
+                  "UA_Server_InsertMethodResponse: Channel is gone");
 
     /* Okay, here we go, send the UA_CallResponse */
     responseHeader = (UA_ResponseHeader*)
@@ -252,10 +250,12 @@ UA_AsyncManager_createAsyncOp(UA_AsyncManager *am, UA_Server *server,
     }
 
     UA_AsyncOperation *ao = (UA_AsyncOperation*)UA_calloc(1, sizeof(UA_AsyncOperation));
-    UA_CHECK(ao, goto mem_error);
+    UA_CHECK_ERROR(ao, return UA_STATUSCODE_BADOUTOFMEMORY,
+                   &server->config.logger, UA_LOGCATEGORY_SERVER,
+                   "UA_Server_SetNextAsyncMethod: Mem alloc failed.");
 
     UA_StatusCode result = UA_CallMethodRequest_copy(opRequest, &ao->request);
-    UA_CHECK_STATUS_ERROR(result, goto copy_error, &server->config.logger, UA_LOGCATEGORY_SERVER,
+    UA_CHECK_STATUS_ERROR(result, UA_free(ao); return result, &server->config.logger, UA_LOGCATEGORY_SERVER,
                      "UA_Server_SetAsyncMethodResult: UA_CallMethodRequest_copy failed.");                
 
     UA_CallMethodResult_init(&ao->response);
@@ -272,15 +272,6 @@ UA_AsyncManager_createAsyncOp(UA_AsyncManager *am, UA_Server *server,
         server->config.asyncOperationNotifyCallback(server);
 
     return UA_STATUSCODE_GOOD;
-
-mem_error:
-    UA_LOG_ERROR(&server->config.logger, UA_LOGCATEGORY_SERVER,
-                "UA_Server_SetNextAsyncMethod: Mem alloc failed.");
-    return UA_STATUSCODE_BADOUTOFMEMORY;
-
-copy_error:
-    UA_free(ao);
-    return result;
 }
 
 /* Get and remove next Method Call Request */

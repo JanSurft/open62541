@@ -331,7 +331,7 @@ UA_Server_newWithConfig(UA_ServerConfig *config) {
     UA_CHECK(config, return NULL);
 
     UA_Server *server = (UA_Server *)UA_calloc(1, sizeof(UA_Server));
-    UA_CHECK(server, goto error);
+    UA_CHECK(server, UA_ServerConfig_clean(config); return NULL);
 
     server->config = *config;
     /* The config might have been "moved" into the server struct. Ensure that
@@ -342,10 +342,6 @@ UA_Server_newWithConfig(UA_ServerConfig *config) {
     /* Reset the old config */
     memset(config, 0, sizeof(UA_ServerConfig));
     return UA_Server_init(server);
-
-error:
-    UA_ServerConfig_clean(config);
-    return NULL;
 }
 
 /* Returns if the server should be shut down immediately */
