@@ -118,11 +118,11 @@ typedef UA_StatusCode status;
  *    UA_CHECK_WARN(rv, return rv, logger, UA_LOGCATEGORY_SERVER, "msg & args %s", "arg");
  */
 #define UA_CHECK_ERROR(STATUSCODE, EVAL, LOGGER, CAT, ...)                               \
-    UA_CHECK_LOG(STATUSCODE, EVAL, ERROR, LOGGER, CAT, ##__VA_ARGS__, "")
+    UA_MACRO_EXPAND(UA_CHECK_LOG(STATUSCODE, EVAL, ERROR, LOGGER, CAT, __VA_ARGS__, ""))
 #define UA_CHECK_WARN(STATUSCODE, EVAL, LOGGER, CAT, ...)                                \
-    UA_CHECK_LOG(STATUSCODE, EVAL, WARNING, LOGGER, CAT, ##__VA_ARGS__, "")
+    UA_MACRO_EXPAND(UA_CHECK_LOG(STATUSCODE, EVAL, WARNING, LOGGER, CAT, __VA_ARGS__, ""))
 #define UA_CHECK_INFO(STATUSCODE, EVAL, LOGGER, CAT, ...)                                \
-    UA_CHECK_LOG(STATUSCODE, EVAL, INFO, LOGGER, CAT, ##__VA_ARGS__, "")
+    UA_MACRO_EXPAND(UA_CHECK_LOG(STATUSCODE, EVAL, INFO, LOGGER, CAT, __VA_ARGS__, ""))
 
 #define UA_CHECK_MEM(A, EVAL_ON_ERROR)                                                   \
     if(!(A)) {                                                                           \
