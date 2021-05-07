@@ -4,6 +4,7 @@
  *
  *    Copyright 2019 (c) Fraunhofer IOSB (Author: Klaus Schick)
  *    Copyright 2019 (c) Fraunhofer IOSB (Author: Julius Pfrommer)
+ *    Copyright 2021 (c) Fraunhofer IOSB (Author: Jan Hermes)
  */
 
 #include "ua_server_internal.h"
@@ -204,14 +205,10 @@ UA_AsyncManager_createAsyncResponse(UA_AsyncManager *am, UA_Server *server,
                                     const UA_AsyncOperationType operationType,
                                     UA_AsyncResponse **outAr) {
     UA_AsyncResponse *newentry = (UA_AsyncResponse*)UA_calloc(1, sizeof(UA_AsyncResponse));
-    if(!newentry)
-        return UA_STATUSCODE_BADOUTOFMEMORY;
+    UA_CHECK_MEM(newentry, return UA_STATUSCODE_BADOUTOFMEMORY);
 
     UA_StatusCode res = UA_NodeId_copy(sessionId, &newentry->sessionId);
-    if(res != UA_STATUSCODE_GOOD) {
-        UA_free(newentry);
-        return res;
-    }
+    UA_CHECK(res, goto error);
 
     am->asyncResponsesCount += 1;
     newentry->requestId = requestId;
@@ -224,6 +221,10 @@ UA_AsyncManager_createAsyncResponse(UA_AsyncManager *am, UA_Server *server,
 
     *outAr = newentry;
     return UA_STATUSCODE_GOOD;
+
+error:
+    UA_free(newentry);
+    return res;
 }
 
 /* Remove entry and free all allocated data */
@@ -250,19 +251,11 @@ UA_AsyncManager_createAsyncOp(UA_AsyncManager *am, UA_Server *server,
     }
 
     UA_AsyncOperation *ao = (UA_AsyncOperation*)UA_calloc(1, sizeof(UA_AsyncOperation));
-    if(!ao) {
-        UA_LOG_ERROR(&server->config.logger, UA_LOGCATEGORY_SERVER,
-                     "UA_Server_SetNextAsyncMethod: Mem alloc failed.");
-        return UA_STATUSCODE_BADOUTOFMEMORY;
-    }
+    UA_CHECK_MEM(ao, goto mem_error);
 
     UA_StatusCode result = UA_CallMethodRequest_copy(opRequest, &ao->request);
-    if(result != UA_STATUSCODE_GOOD) {
-        UA_LOG_ERROR(&server->config.logger, UA_LOGCATEGORY_SERVER,
+    UA_CHECK_ERROR(result, goto error, &server->config.logger, UA_LOGCATEGORY_SERVER,
                      "UA_Server_SetAsyncMethodResult: UA_CallMethodRequest_copy failed.");                
-        UA_free(ao);
-        return result;
-    }
 
     UA_CallMethodResult_init(&ao->response);
     ao->index = opIndex;
@@ -278,6 +271,15 @@ UA_AsyncManager_createAsyncOp(UA_AsyncManager *am, UA_Server *server,
         server->config.asyncOperationNotifyCallback(server);
 
     return UA_STATUSCODE_GOOD;
+
+mem_error:
+    UA_LOG_ERROR(&server->config.logger, UA_LOGCATEGORY_SERVER,
+                "UA_Server_SetNextAsyncMethod: Mem alloc failed.");
+    return UA_STATUSCODE_BADOUTOFMEMORY;
+
+copy_error:
+    UA_free(ao);
+    return result;
 }
 
 /* Get and remove next Method Call Request */
@@ -354,11 +356,10 @@ UA_Server_setAsyncOperationResult(UA_Server *server,
     /* Copy the result into the internal AsyncOperation */
     UA_StatusCode result =
         UA_CallMethodResult_copy(&response->callMethodResult, &ao->response);
-    if(result != UA_STATUSCODE_GOOD) {
-        UA_LOG_WARNING(&server->config.logger, UA_LOGCATEGORY_SERVER,
-                       "UA_Server_SetAsyncMethodResult: UA_CallMethodResult_copy failed.");
-        ao->response.statusCode = UA_STATUSCODE_BADOUTOFMEMORY;
-    }
+    UA_CHECK_WARN(result, 
+            ao->response.statusCode = UA_STATUSCODE_BADOUTOFMEMORY,
+            &server->config.logger, UA_LOGCATEGORY_SERVER,
+            "UA_Server_SetAsyncMethodResult: UA_CallMethodResult_copy failed.");
 
     /* Move to the result queue */
     TAILQ_REMOVE(&am->dispatchedQueue, ao, pointers);
@@ -406,8 +407,8 @@ UA_Server_processServiceOperationsAsync(UA_Server *server, UA_Session *session,
     /* Allocate the response array. No padding after size_t */
     void **respPos = (void**)((uintptr_t)responseOperations + sizeof(size_t));
     *respPos = UA_Array_new(ops, responseOperationsType);
-    if(!*respPos)
-        return UA_STATUSCODE_BADOUTOFMEMORY;
+    UA_CHECK_MEM(*respPos, return UA_STATUSCODE_BADOUTOFMEMORY);
+    
     *responseOperations = ops;
 
     /* Finish / dispatch the operations. This may allocate a new AsyncResponse internally */
