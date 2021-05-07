@@ -97,13 +97,14 @@ typedef UA_StatusCode status;
     }
 
 #define UA_CHECK_LOG_INTERNAL(STATUS_CODE, EVAL, LOG, LOGGER, CAT, MSG, ...)             \
-    UA_CHECK(STATUS_CODE,                                                                \
-             LOG(LOGGER, CAT, "" MSG "%s (%s:%d: status-code: %s)", ##__VA_ARGS__,       \
-                 __FILE__, __LINE__, UA_StatusCode_name(STATUS_CODE));                   \
-             EVAL)
+    UA_MACRO_EXPAND(UA_CHECK(                                                            \
+        STATUS_CODE, LOG(LOGGER, CAT, "" MSG "%s (%s:%d: status-code: %s)", __VA_ARGS__, \
+                         __FILE__, __LINE__, UA_StatusCode_name(STATUS_CODE));           \
+        EVAL))
 
 #define UA_CHECK_LOG(STATUS_CODE, EVAL, LEVEL, LOGGER, CAT, ...)                         \
-    UA_CHECK_LOG_INTERNAL(STATUS_CODE, EVAL, UA_LOG_##LEVEL, LOGGER, CAT, ##__VA_ARGS__)
+    UA_MACRO_EXPAND(UA_CHECK_LOG_INTERNAL(STATUS_CODE, EVAL, UA_LOG_##LEVEL, LOGGER,     \
+                                          CAT, __VA_ARGS__))
 
 /**
  * Check Macros
