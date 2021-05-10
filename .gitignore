@@ -84,3 +84,5 @@ Makefile
 Pipfile
 Pipfile.lock
 .vscode
+.cache/
+.vim/
