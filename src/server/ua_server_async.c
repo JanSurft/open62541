@@ -206,7 +206,7 @@ UA_AsyncManager_createAsyncResponse(UA_AsyncManager *am, UA_Server *server,
     UA_CHECK(newentry, return UA_STATUSCODE_BADOUTOFMEMORY);
 
     UA_StatusCode res = UA_NodeId_copy(sessionId, &newentry->sessionId);
-    UA_CHECK(res, cleanup);
+    UA_CHECK(res, UA_free(newentry); return res);
 
     am->asyncResponsesCount += 1;
     newentry->requestId = requestId;
@@ -219,10 +219,6 @@ UA_AsyncManager_createAsyncResponse(UA_AsyncManager *am, UA_Server *server,
 
     *outAr = newentry;
     return UA_STATUSCODE_GOOD;
-
-cleanup:
-    UA_free(newentry);
-    return res;
 }
 
 /* Remove entry and free all allocated data */
@@ -241,13 +237,14 @@ UA_AsyncManager_createAsyncOp(UA_AsyncManager *am, UA_Server *server,
                               UA_AsyncResponse *ar, size_t opIndex,
                               const UA_CallMethodRequest *opRequest) {
 
-    if(server->config.maxAsyncOperationQueueSize != 0 &&
-       am->opsCount >= server->config.maxAsyncOperationQueueSize) {
-        UA_LOG_WARNING(&server->config.logger, UA_LOGCATEGORY_SERVER,
-                       "UA_Server_SetNextAsyncMethod: Queue exceeds limit (%d).",
-                       (int unsigned)server->config.maxAsyncOperationQueueSize);
-        return UA_STATUSCODE_BADUNEXPECTEDERROR;
-    }
+    bool opCountUnlimited = server->config.maxAsyncOperationQueueSize == 0;
+    bool opCountLimitNotExceeded = am->opsCount < server->config.maxAsyncOperationQueueSize;
+
+    UA_CHECK_WARN(opCountUnlimited || opCountLimitNotExceeded, 
+       &server->config.logger, UA_LOGCATEGORY_SERVER,
+       "UA_Server_SetNextAsyncMethod: Queue exceeds limit (%d).",
+       (int unsigned)server->config.maxAsyncOperationQueueSize,
+       return UA_STATUSCODE_BADUNEXPECTEDERROR);
 
     UA_AsyncOperation *ao = (UA_AsyncOperation*)UA_calloc(1, sizeof(UA_AsyncOperation));
     UA_CHECK_ERROR(ao, return UA_STATUSCODE_BADOUTOFMEMORY,
@@ -312,12 +309,15 @@ void
 UA_Server_setAsyncOperationResult(UA_Server *server,
                                   const UA_AsyncOperationResponse *response,
                                   void *context) {
+
+    UA_Logger *logger = server->config.logger;
+
     UA_AsyncManager *am = &server->asyncManager;
 
     UA_AsyncOperation *ao = (UA_AsyncOperation*)context;
 
     /* Check if something went wrong (Not a good AsyncOp). */
-    UA_CHECK_WARN(ao, return, &server->config.logger, UA_LOGCATEGORY_SERVER,
+    UA_CHECK_WARN(ao, return, logger, UA_LOGCATEGORY_SERVER,
                        "UA_Server_SetAsyncMethodResult: Invalid context");
 
     UA_LOCK(&am->queueLock);
@@ -336,7 +336,7 @@ UA_Server_setAsyncOperationResult(UA_Server *server,
         }
     }
     UA_CHECK_WARN(found, UA_UNLOCK(&am->queueLock); return,
-                    &server->config.logger, UA_LOGCATEGORY_SERVER,
+                    logger, UA_LOGCATEGORY_SERVER,
                     "UA_Server_SetAsyncMethodResult: The operation has timed out");
 
     /* Copy the result into the internal AsyncOperation */
@@ -344,7 +344,7 @@ UA_Server_setAsyncOperationResult(UA_Server *server,
         UA_CallMethodResult_copy(&response->callMethodResult, &ao->response);
     UA_CHECK_WARN(result, 
             ao->response.statusCode = UA_STATUSCODE_BADOUTOFMEMORY,
-            &server->config.logger, UA_LOGCATEGORY_SERVER,
+            logger, UA_LOGCATEGORY_SERVER,
             "UA_Server_SetAsyncMethodResult: UA_CallMethodResult_copy failed.");
 
     /* Move to the result queue */
@@ -353,7 +353,7 @@ UA_Server_setAsyncOperationResult(UA_Server *server,
 
     UA_UNLOCK(&am->queueLock);
 
-    UA_LOG_DEBUG(&server->config.logger, UA_LOGCATEGORY_SERVER,
+    UA_LOG_DEBUG(logger, UA_LOGCATEGORY_SERVER,
                  "Set the result from the worker thread");
 }
 
