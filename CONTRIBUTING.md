@@ -457,8 +457,6 @@ foo(int *errorCounter) {
 }
 ```
 
-**logging examples**
-
 ```c
 static UA_StatusCode
 foo(UA_Server *server) {
@@ -477,9 +475,6 @@ foo(UA_Server *server) {
     return UA_STATUSCODE_GOOD;
 }
 ```
-##### 2. Handling `boolean` check values
-
-**non logging examples**
 
 ```c
 static UA_StatusCode
@@ -498,8 +493,6 @@ foo() {
 }
 ```
 
-**logging examples**
-
 ```c
 static UA_StatusCode
 foo(UA_Server *server) {
@@ -517,106 +510,7 @@ foo(UA_Server *server) {
 
     return UA_STATUSCODE_GOOD;
 }
-
-**Handling `UA_StatusCode` check values**
-
-The corresponding macros are:
-- `UA_CHECK_STATUS`
-- `UA_CHECK_STATUS_FATAL`
-- `UA_CHECK_STATUS_ERROR`
-- `UA_CHECK_STATUS_WARN`
-- `UA_CHECK_STATUS_INFO`
-
-##### 2. Handling memory address returns 
-
-```c 
-static UA_StatusCode
-foo() {
-    void *data = malloc(...);
-    UA_CHECK_MEM(data, return UA_STATUSCODE_BADOUTOFMEMORY);
-
-    return UA_STATUSCODE_GOOD;
-}
 ```
-**non logging examples**
-
-```c
-static UA_StatusCode
-foo(int *errorCounter) {
-    
-    UA_StatusCode rv = do_something();
-    // if rv != UA_STATUSCODE_GOOD then "return rv" gets evaluated
-    UA_CHECK_STATUS(rv, return rv);
-  
-    rv = do_another_thing();
-    // EVAL_ON_ERROR can take multiple statements
-    // (e.g. first modifying some value then return the error code) 
-    UA_CHECK_STATUS(rv, rv = UA_STATUSCODE_BAD; errorCounter++; return rv);
-
-    return UA_STATUSCODE_GOOD;
-}
-```
-
-**logging examples**
-
-```c
-static UA_StatusCode
-foo(UA_Server *server) {
-    
-    // assign the logger for later simple use
-    UA_Logger *logger = &server->config.logger;
-    
-    UA_StatusCode rv = do_something();
-    // if rv != UA_STATUSCODE_GOOD then 
-    // an error logging message is generated and 
-    // "return rv" gets evaluated
-    UA_CHECK_ERROR(rv, return rv,
-                   logger, UA_LOGCATEGORY_SERVER,
-                   "My logging message with special info: %d", 42);
-
-    return UA_STATUSCODE_GOOD;
-}
-```
-##### 2. Handling `boolean` check values
-
-**non logging examples**
-
-```c
-static UA_StatusCode
-foo() {
-    
-    UA_Boolean mustBeTrue = do_something();
-    // if mustBeTrue != true then "return UA_STATUSCODE_BAD" gets evaluated
-    UA_CHECK(mustBeTrue, return UA_STATUSCODE_BAD);
-   
-    UA_StatusCode rv = UA_STATUSCODE_GOOD;
-    // EVAL_ON_ERROR can take multiple statements
-    // (e.g. first assigning some value then return the error code) 
-    UA_CHECK(mustBeTrue, rv = UA_STATUSCODE_BAD; return rv);
-
-    return UA_STATUSCODE_GOOD;
-}
-```
-
-**logging examples**
-
-```c
-static UA_StatusCode
-foo(UA_Server *server) {
-    
-    // assign the logger for later simple use
-    UA_Logger *logger = &server->config.logger;
-    
-    UA_Boolean mustBeTrue = do_something();
-    // if mustBeTrue != true then 
-    // an error logging message is generated and 
-    // "return UA_STATUSCODE_BAD" gets evaluated
-    UA_CHECK_ERROR(mustBeTrue, return UA_STATUSCODE_BAD,
-                   logger, UA_LOGCATEGORY_SERVER,
-                   "My logging message with special info: %d", 42);
-
-    return UA_STATUSCODE_GOOD;
-}
 
 ### Still unsure?
 If any questions arise concerning code style, feel free to start an issue.
