@@ -206,7 +206,7 @@ UA_AsyncManager_createAsyncResponse(UA_AsyncManager *am, UA_Server *server,
     UA_CHECK(newentry, return UA_STATUSCODE_BADOUTOFMEMORY);
 
     UA_StatusCode res = UA_NodeId_copy(sessionId, &newentry->sessionId);
-    UA_CHECK(res, UA_free(newentry); return res);
+    UA_CHECK_STATUS(res, UA_free(newentry); return res);
 
     am->asyncResponsesCount += 1;
     newentry->requestId = requestId;
