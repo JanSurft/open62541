@@ -91,19 +91,33 @@ typedef UA_StatusCode status;
  * Error checking macros
  */
 
+static UA_INLINE UA_Boolean
+isGood(UA_StatusCode code) {
+    return code == UA_STATUSCODE_GOOD;
+}
+
 #define UA_CHECK(A, EVAL_ON_ERROR)                                                       \
     if(!(A)) {                                                                           \
         EVAL_ON_ERROR;                                                                   \
     }
 
 #define UA_CHECK_STATUS(STATUSCODE, EVAL_ON_ERROR)                                       \
-    UA_CHECK((STATUSCODE) == UA_STATUSCODE_GOOD, EVAL_ON_ERROR)
+    UA_CHECK(isGood(STATUSCODE), EVAL_ON_ERROR)
+
+#ifndef NDEBUG
 
 #define UA_CHECK_LOG_INTERNAL(A, STATUSCODE, EVAL, LOG, LOGGER, CAT, MSG, ...)           \
     UA_MACRO_EXPAND(                                                                     \
         UA_CHECK(A, LOG(LOGGER, CAT, "" MSG "%s (%s:%d: statuscode: %s)", __VA_ARGS__,   \
                         __FILE__, __LINE__, UA_StatusCode_name(STATUSCODE));             \
                  EVAL))
+#else
+#define UA_CHECK_LOG_INTERNAL(A, STATUSCODE, EVAL, LOG, LOGGER, CAT, MSG, ...)           \
+    UA_MACRO_EXPAND(                                                                     \
+        UA_CHECK(A, LOG(LOGGER, CAT, "" MSG "%s (%s:%d: statuscode: %s)", __VA_ARGS__,   \
+                        __FILE__, __LINE__, UA_StatusCode_name(STATUSCODE));             \
+                 EVAL))
+#endif
 
 #define UA_CHECK_LOG(A, EVAL, LEVEL, LOGGER, CAT, ...)                                   \
     UA_MACRO_EXPAND(UA_CHECK_LOG_INTERNAL(A, UA_STATUSCODE_BAD, EVAL, UA_LOG_##LEVEL,    \
@@ -113,6 +127,9 @@ typedef UA_StatusCode status;
     UA_MACRO_EXPAND(UA_CHECK_LOG_INTERNAL(STATUSCODE == UA_STATUSCODE_GOOD, STATUSCODE,  \
                                           EVAL, UA_LOG_##LEVEL, LOGGER, CAT,             \
                                           __VA_ARGS__, ""))
+
+
+// UA_CHECK_MEM
 
 /**
  * Check Macros
