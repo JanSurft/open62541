@@ -351,5 +351,272 @@ If you are using CLion you can configure your IDE by importing [this scheme](htt
 
 1. check_main.c file is used to aggregate test cases that are executed
 
+### 10 Checking returns, error logging and cleanup
+
+Error handling and corresponding reactions like cleanup, logging or updating
+internal error states is important for stable program flow.
+
+This section firstly describes specific macros that are used for checking return 
+values in various situations in [Check Macros](#check-macros).
+Secondly, [Cleanup](#cleanup) describes in which situations cleanup routines should be
+used and how to use them.
+
+#### Check Macros
+
+For checking return values within functions there are specific macros that are used.
+Handling check values and errors belongs to three different categories:
+
+1. Handling `UA_StatusCode` check values
+2. Handling memory allocation errors  
+3. Handling general `boolean` check values
+
+For each of these three categories there is a specific range of macros to be called
+that helps keeping the code cleaner while possibly adding logging information.
+
+For each category there are essentially two flavors of macros: 
+- basic macros for checking a given value and perform desired actions upon error
+  - `UA_CHECK` for general boolean values
+  - `UA_CHECK_STATUS` for `UA_StatusCode` values
+  - `UA_CHECK_MEM` for pointer values
+- specialized macros that additionally 
+  log a specified message and add information to the error based on the three basic 
+  macros. For general boolean values to 
+  e checked those macros are:
+  - `UA_CHECK_FATAL` generates fatal log message
+  - `UA_CHECK_ERROR` generates error log message
+  - `UA_CHECK_WARN` generates warning log message
+  - `UA_CHECK_INFO` generates info log message
+    
+Make sure to check out the examples below for applications of different macros.
+
+#### Cleanup
+
+In some situations it is feasible to use the `goto` command in C. This is the case
+e.g. for jumping to cleanup routines that are used to perform a series of commands.
+
+For the development of `open62541` we employ a specific rule for which cleanup routines 
+should be used: If the same cleanup routine is used from at least two places in the same function
+then this routine should be called via a `goto` statement.
+
+In this example e.g. only the second error check needs to free up some memory upon encountering
+an error, thus a jump to a cleanup routine is not indicated.
+
+```c
+void noCleanupRoutine(void *data) {
+   
+    data = malloc(sizeof(int));
+    UA_CHECK_MEM(data, return UA_STATUSCODE_BADOUTOFMEMORY);
+     
+    UA_StatusCode rv = do_something();
+    UA_CHECK_STATUS(rv, free(data); return rv);
+    
+    return UA_STATUSCODE_GOOD;
+}
+```
+
+The below example on the other hand, shows two functions that use the same
+routine for cleanup. A `goto` routine should thus be used.
+
+```c
+void yesCleanupRoutine(void *data) {
+    
+    data = malloc(sizeof(int));
+    UA_CHECK_MEM(data, return UA_STATUSCODE_BADOUTOFMEMORY);
+  
+    // jumps to cleanup routine upon encountering a bad statuscode 
+    UA_StatusCode rv = do_something();
+    UA_CHECK_STATUS(rv, goto cleanup);
+ 
+    // jumps to the same cleanup routine
+    rv = do_something_else();
+    UA_CHECK_STATUS(rv, goto cleanup);
+   
+    return UA_STATUSCODE_GOOD;
+    
+cleanup:
+    free(data);
+    return rv;
+}
+```
+
+##### Examples
+```c
+static UA_StatusCode
+foo(int *errorCounter) {
+    
+    UA_StatusCode rv = do_something();
+    // if rv != UA_STATUSCODE_GOOD then "return rv" gets evaluated
+    UA_CHECK_STATUS(rv, return rv);
+  
+    rv = do_another_thing();
+    // EVAL_ON_ERROR can take multiple statements
+    // (e.g. first modifying some value then return the error code) 
+    UA_CHECK_STATUS(rv, rv = UA_STATUSCODE_BAD; errorCounter++; return rv);
+
+    return UA_STATUSCODE_GOOD;
+}
+```
+
+**logging examples**
+
+```c
+static UA_StatusCode
+foo(UA_Server *server) {
+    
+    // assign the logger for later simple use
+    UA_Logger *logger = &server->config.logger;
+    
+    UA_StatusCode rv = do_something();
+    // if rv != UA_STATUSCODE_GOOD then 
+    // an error logging message is generated and 
+    // "return rv" gets evaluated
+    UA_CHECK_ERROR(rv, return rv,
+                   logger, UA_LOGCATEGORY_SERVER,
+                   "My logging message with special info: %d", 42);
+
+    return UA_STATUSCODE_GOOD;
+}
+```
+##### 2. Handling `boolean` check values
+
+**non logging examples**
+
+```c
+static UA_StatusCode
+foo() {
+    
+    UA_Boolean mustBeTrue = do_something();
+    // if mustBeTrue != true then "return UA_STATUSCODE_BAD" gets evaluated
+    UA_CHECK(mustBeTrue, return UA_STATUSCODE_BAD);
+   
+    UA_StatusCode rv = UA_STATUSCODE_GOOD;
+    // EVAL_ON_ERROR can take multiple statements
+    // (e.g. first assigning some value then return the error code) 
+    UA_CHECK(mustBeTrue, rv = UA_STATUSCODE_BAD; return rv);
+
+    return UA_STATUSCODE_GOOD;
+}
+```
+
+**logging examples**
+
+```c
+static UA_StatusCode
+foo(UA_Server *server) {
+    
+    // assign the logger for later simple use
+    UA_Logger *logger = &server->config.logger;
+    
+    UA_Boolean mustBeTrue = do_something();
+    // if mustBeTrue != true then 
+    // an error logging message is generated and 
+    // "return UA_STATUSCODE_BAD" gets evaluated
+    UA_CHECK_ERROR(mustBeTrue, return UA_STATUSCODE_BAD,
+                   logger, UA_LOGCATEGORY_SERVER,
+                   "My logging message with special info: %d", 42);
+
+    return UA_STATUSCODE_GOOD;
+}
+
+**Handling `UA_StatusCode` check values**
+
+The corresponding macros are:
+- `UA_CHECK_STATUS`
+- `UA_CHECK_STATUS_FATAL`
+- `UA_CHECK_STATUS_ERROR`
+- `UA_CHECK_STATUS_WARN`
+- `UA_CHECK_STATUS_INFO`
+
+##### 2. Handling memory address returns 
+
+```c 
+static UA_StatusCode
+foo() {
+    void *data = malloc(...);
+    UA_CHECK_MEM(data, return UA_STATUSCODE_BADOUTOFMEMORY);
+
+    return UA_STATUSCODE_GOOD;
+}
+```
+**non logging examples**
+
+```c
+static UA_StatusCode
+foo(int *errorCounter) {
+    
+    UA_StatusCode rv = do_something();
+    // if rv != UA_STATUSCODE_GOOD then "return rv" gets evaluated
+    UA_CHECK_STATUS(rv, return rv);
+  
+    rv = do_another_thing();
+    // EVAL_ON_ERROR can take multiple statements
+    // (e.g. first modifying some value then return the error code) 
+    UA_CHECK_STATUS(rv, rv = UA_STATUSCODE_BAD; errorCounter++; return rv);
+
+    return UA_STATUSCODE_GOOD;
+}
+```
+
+**logging examples**
+
+```c
+static UA_StatusCode
+foo(UA_Server *server) {
+    
+    // assign the logger for later simple use
+    UA_Logger *logger = &server->config.logger;
+    
+    UA_StatusCode rv = do_something();
+    // if rv != UA_STATUSCODE_GOOD then 
+    // an error logging message is generated and 
+    // "return rv" gets evaluated
+    UA_CHECK_ERROR(rv, return rv,
+                   logger, UA_LOGCATEGORY_SERVER,
+                   "My logging message with special info: %d", 42);
+
+    return UA_STATUSCODE_GOOD;
+}
+```
+##### 2. Handling `boolean` check values
+
+**non logging examples**
+
+```c
+static UA_StatusCode
+foo() {
+    
+    UA_Boolean mustBeTrue = do_something();
+    // if mustBeTrue != true then "return UA_STATUSCODE_BAD" gets evaluated
+    UA_CHECK(mustBeTrue, return UA_STATUSCODE_BAD);
+   
+    UA_StatusCode rv = UA_STATUSCODE_GOOD;
+    // EVAL_ON_ERROR can take multiple statements
+    // (e.g. first assigning some value then return the error code) 
+    UA_CHECK(mustBeTrue, rv = UA_STATUSCODE_BAD; return rv);
+
+    return UA_STATUSCODE_GOOD;
+}
+```
+
+**logging examples**
+
+```c
+static UA_StatusCode
+foo(UA_Server *server) {
+    
+    // assign the logger for later simple use
+    UA_Logger *logger = &server->config.logger;
+    
+    UA_Boolean mustBeTrue = do_something();
+    // if mustBeTrue != true then 
+    // an error logging message is generated and 
+    // "return UA_STATUSCODE_BAD" gets evaluated
+    UA_CHECK_ERROR(mustBeTrue, return UA_STATUSCODE_BAD,
+                   logger, UA_LOGCATEGORY_SERVER,
+                   "My logging message with special info: %d", 42);
+
+    return UA_STATUSCODE_GOOD;
+}
+
 ### Still unsure?
 If any questions arise concerning code style, feel free to start an issue.
