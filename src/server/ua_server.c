@@ -72,7 +72,7 @@ UA_UInt16 addNamespace(UA_Server *server, const UA_String name) {
     /* Make the array bigger */
     UA_String *newNS = (UA_String*)UA_realloc(server->namespaces,
                                               sizeof(UA_String) * (server->namespacesSize + 1));
-    UA_CHECK(newNS, return 0);
+    UA_CHECK_MEM(newNS, return 0);
 
     server->namespaces = newNS;
 
@@ -98,7 +98,7 @@ UA_UInt16 UA_Server_addNamespace(UA_Server *server, const char* name) {
 
 UA_ServerConfig*
 UA_Server_getConfig(UA_Server *server) {
-    UA_CHECK(server, return NULL);
+    UA_CHECK_MEM(server, return NULL);
     return &server->config;
 }
 
@@ -243,11 +243,17 @@ UA_Server_cleanup(UA_Server *server, void *_) {
 /* Server Lifecycle */
 /********************/
 
+static
+UA_INLINE
+UA_Boolean UA_Server_NodestoreIsConfigured(UA_Server *server) {
+    return server->config.nodestore.getNode;
+}
+
 static UA_Server *
 UA_Server_init(UA_Server *server) {
 
     UA_StatusCode res = UA_STATUSCODE_GOOD;
-    UA_CHECK_FATAL(server->config.nodestore.getNode, goto cleanup,
+    UA_CHECK_FATAL(UA_Server_NodestoreIsConfigured(server), goto cleanup,
                     &server->config.logger, UA_LOGCATEGORY_SERVER,
                     "No Nodestore configured in the server"
                    );
@@ -278,7 +284,7 @@ UA_Server_init(UA_Server *server) {
     /* Create Namespaces 0 and 1
      * Ns1 will be filled later with the uri from the app description */
     server->namespaces = (UA_String *)UA_Array_new(2, &UA_TYPES[UA_TYPES_STRING]);
-    UA_CHECK(server->namespaces, goto cleanup);
+    UA_CHECK_MEM(server->namespaces, goto cleanup);
 
     server->namespaces[0] = UA_STRING_ALLOC("http://opcfoundation.org/UA/");
     server->namespaces[1] = UA_STRING_NULL;
@@ -327,10 +333,10 @@ UA_Server_init(UA_Server *server) {
 
 UA_Server *
 UA_Server_newWithConfig(UA_ServerConfig *config) {
-    UA_CHECK(config, return NULL);
+    UA_CHECK_MEM(config, return NULL);
 
     UA_Server *server = (UA_Server *)UA_calloc(1, sizeof(UA_Server));
-    UA_CHECK(server, UA_ServerConfig_clean(config); return NULL);
+    UA_CHECK_MEM(server, UA_ServerConfig_clean(config); return NULL);
 
     server->config = *config;
     /* The config might have been "moved" into the server struct. Ensure that
@@ -463,7 +469,7 @@ UA_Server_updateCertificate(UA_Server *server,
             UA_String_copy(newCertificate, &ed->serverCertificate);
             UA_SecurityPolicy *sp = getSecurityPolicyByUri(server,
                             &server->config.endpoints[i].securityPolicyUri);
-            UA_CHECK(sp, return UA_STATUSCODE_BADINTERNALERROR);
+            UA_CHECK_MEM(sp, return UA_STATUSCODE_BADINTERNALERROR);
             sp->updateCertificateAndPrivateKey(sp, *newCertificate, *newPrivateKey);
         }
         i++;
@@ -599,7 +605,7 @@ UA_Server_run_startup(UA_Server *server) {
     }
     server->config.applicationDescription.discoveryUrls = (UA_String *)
         UA_Array_new(server->config.networkLayersSize, &UA_TYPES[UA_TYPES_STRING]);
-    UA_CHECK(server->config.applicationDescription.discoveryUrls,
+    UA_CHECK_MEM(server->config.applicationDescription.discoveryUrls,
              return UA_STATUSCODE_BADOUTOFMEMORY);
 
     server->config.applicationDescription.discoveryUrlsSize =
