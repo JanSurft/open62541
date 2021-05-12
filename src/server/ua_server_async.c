@@ -4,7 +4,6 @@
  *
  *    Copyright 2019 (c) Fraunhofer IOSB (Author: Klaus Schick)
  *    Copyright 2019 (c) Fraunhofer IOSB (Author: Julius Pfrommer)
- *    Copyright 2021 (c) Fraunhofer IOSB (Author: Jan Hermes)
  */
 
 #include "ua_server_internal.h"
@@ -23,24 +22,26 @@ UA_AsyncManager_sendAsyncResponse(UA_AsyncManager *am, UA_Server *server,
                                   UA_AsyncResponse *ar) {
     /* Get the session */
     UA_StatusCode res = UA_STATUSCODE_GOOD;
-
-    UA_SecureChannel* channel = NULL;
-    UA_ResponseHeader *responseHeader = NULL;
-
     UA_LOCK(&server->serviceMutex);
     UA_Session* session = UA_Server_getSessionById(server, &ar->sessionId);
     UA_UNLOCK(&server->serviceMutex);
-    UA_CHECK_WARN(session,
-                  res = UA_STATUSCODE_BADSESSIONIDINVALID; goto cleanup,
-                  &server->config.logger, UA_LOGCATEGORY_SERVER,
-                  "UA_Server_InsertMethodResponse: Session is gone");
+    UA_SecureChannel* channel = NULL;
+    UA_ResponseHeader *responseHeader = NULL;
+    if(!session) {
+        res = UA_STATUSCODE_BADSESSIONIDINVALID;
+        UA_LOG_WARNING(&server->config.logger, UA_LOGCATEGORY_SERVER,
+                       "UA_Server_InsertMethodResponse: Session is gone");
+        goto clean_up;
+    }
 
     /* Check the channel */
     channel = session->header.channel;
-    UA_CHECK_WARN(channel,
-                  res = UA_STATUSCODE_BADSECURECHANNELCLOSED; goto cleanup,
-                  &server->config.logger, UA_LOGCATEGORY_SERVER,
-                  "UA_Server_InsertMethodResponse: Channel is gone");
+    if(!channel) {
+        res = UA_STATUSCODE_BADSECURECHANNELCLOSED;
+        UA_LOG_WARNING(&server->config.logger, UA_LOGCATEGORY_SERVER,
+                       "UA_Server_InsertMethodResponse: Channel is gone");
+        goto clean_up;
+    }
 
     /* Okay, here we go, send the UA_CallResponse */
     responseHeader = (UA_ResponseHeader*)
@@ -203,10 +204,14 @@ UA_AsyncManager_createAsyncResponse(UA_AsyncManager *am, UA_Server *server,
                                     const UA_AsyncOperationType operationType,
                                     UA_AsyncResponse **outAr) {
     UA_AsyncResponse *newentry = (UA_AsyncResponse*)UA_calloc(1, sizeof(UA_AsyncResponse));
-    UA_CHECK(newentry, return UA_STATUSCODE_BADOUTOFMEMORY);
+    if(!newentry)
+        return UA_STATUSCODE_BADOUTOFMEMORY;
 
     UA_StatusCode res = UA_NodeId_copy(sessionId, &newentry->sessionId);
-    UA_CHECK_STATUS(res, UA_free(newentry); return res);
+    if(res != UA_STATUSCODE_GOOD) {
+        UA_free(newentry);
+        return res;
+    }
 
     am->asyncResponsesCount += 1;
     newentry->requestId = requestId;
@@ -236,24 +241,28 @@ UA_StatusCode
 UA_AsyncManager_createAsyncOp(UA_AsyncManager *am, UA_Server *server,
                               UA_AsyncResponse *ar, size_t opIndex,
                               const UA_CallMethodRequest *opRequest) {
-
-    bool opCountUnlimited = server->config.maxAsyncOperationQueueSize == 0;
-    bool opCountLimitNotExceeded = am->opsCount < server->config.maxAsyncOperationQueueSize;
-
-    UA_CHECK_WARN(opCountUnlimited || opCountLimitNotExceeded, 
-       &server->config.logger, UA_LOGCATEGORY_SERVER,
-       "UA_Server_SetNextAsyncMethod: Queue exceeds limit (%d).",
-       (int unsigned)server->config.maxAsyncOperationQueueSize,
-       return UA_STATUSCODE_BADUNEXPECTEDERROR);
+    if(server->config.maxAsyncOperationQueueSize != 0 &&
+       am->opsCount >= server->config.maxAsyncOperationQueueSize) {
+        UA_LOG_WARNING(&server->config.logger, UA_LOGCATEGORY_SERVER,
+                       "UA_Server_SetNextAsyncMethod: Queue exceeds limit (%d).",
+                       (int unsigned)server->config.maxAsyncOperationQueueSize);
+        return UA_STATUSCODE_BADUNEXPECTEDERROR;
+    }
 
     UA_AsyncOperation *ao = (UA_AsyncOperation*)UA_calloc(1, sizeof(UA_AsyncOperation));
-    UA_CHECK_ERROR(ao, return UA_STATUSCODE_BADOUTOFMEMORY,
-                   &server->config.logger, UA_LOGCATEGORY_SERVER,
-                   "UA_Server_SetNextAsyncMethod: Mem alloc failed.");
+    if(!ao) {
+        UA_LOG_ERROR(&server->config.logger, UA_LOGCATEGORY_SERVER,
+                     "UA_Server_SetNextAsyncMethod: Mem alloc failed.");
+        return UA_STATUSCODE_BADOUTOFMEMORY;
+    }
 
     UA_StatusCode result = UA_CallMethodRequest_copy(opRequest, &ao->request);
-    UA_CHECK_STATUS_ERROR(result, UA_free(ao); return result, &server->config.logger, UA_LOGCATEGORY_SERVER,
+    if(result != UA_STATUSCODE_GOOD) {
+        UA_LOG_ERROR(&server->config.logger, UA_LOGCATEGORY_SERVER,
                      "UA_Server_SetAsyncMethodResult: UA_CallMethodRequest_copy failed.");                
+        UA_free(ao);
+        return result;
+    }
 
     UA_CallMethodResult_init(&ao->response);
     ao->index = opIndex;
@@ -309,16 +318,15 @@ void
 UA_Server_setAsyncOperationResult(UA_Server *server,
                                   const UA_AsyncOperationResponse *response,
                                   void *context) {
-
-    UA_Logger *logger = server->config.logger;
-
     UA_AsyncManager *am = &server->asyncManager;
 
     UA_AsyncOperation *ao = (UA_AsyncOperation*)context;
-
-    /* Check if something went wrong (Not a good AsyncOp). */
-    UA_CHECK_WARN(ao, return, logger, UA_LOGCATEGORY_SERVER,
+    if(!ao) {
+        /* Something went wrong. Not a good AsyncOp. */
+        UA_LOG_WARNING(&server->config.logger, UA_LOGCATEGORY_SERVER,
                        "UA_Server_SetAsyncMethodResult: Invalid context");
+        return;
+    }
 
     UA_LOCK(&am->queueLock);
 
@@ -335,17 +343,22 @@ UA_Server_setAsyncOperationResult(UA_Server *server,
             break;
         }
     }
-    UA_CHECK_WARN(found, UA_UNLOCK(&am->queueLock); return,
-                    logger, UA_LOGCATEGORY_SERVER,
-                    "UA_Server_SetAsyncMethodResult: The operation has timed out");
+
+    if(!found) {
+        UA_LOG_WARNING(&server->config.logger, UA_LOGCATEGORY_SERVER,
+                       "UA_Server_SetAsyncMethodResult: The operation has timed out");
+        UA_UNLOCK(&am->queueLock);
+        return;
+    }
 
     /* Copy the result into the internal AsyncOperation */
     UA_StatusCode result =
         UA_CallMethodResult_copy(&response->callMethodResult, &ao->response);
-    UA_CHECK_WARN(result, 
-            ao->response.statusCode = UA_STATUSCODE_BADOUTOFMEMORY,
-            logger, UA_LOGCATEGORY_SERVER,
-            "UA_Server_SetAsyncMethodResult: UA_CallMethodResult_copy failed.");
+    if(result != UA_STATUSCODE_GOOD) {
+        UA_LOG_WARNING(&server->config.logger, UA_LOGCATEGORY_SERVER,
+                       "UA_Server_SetAsyncMethodResult: UA_CallMethodResult_copy failed.");
+        ao->response.statusCode = UA_STATUSCODE_BADOUTOFMEMORY;
+    }
 
     /* Move to the result queue */
     TAILQ_REMOVE(&am->dispatchedQueue, ao, pointers);
@@ -353,7 +366,7 @@ UA_Server_setAsyncOperationResult(UA_Server *server,
 
     UA_UNLOCK(&am->queueLock);
 
-    UA_LOG_DEBUG(logger, UA_LOGCATEGORY_SERVER,
+    UA_LOG_DEBUG(&server->config.logger, UA_LOGCATEGORY_SERVER,
                  "Set the result from the worker thread");
 }
 
@@ -364,10 +377,8 @@ UA_Server_setAsyncOperationResult(UA_Server *server,
 static UA_StatusCode
 setMethodNodeAsync(UA_Server *server, UA_Session *session,
                    UA_Node *node, UA_Boolean *isAsync) {
-
-    UA_CHECK(node->head.nodeClass == UA_NODECLASS_METHOD,
-            return UA_STATUSCODE_BADNODECLASSINVALID);
-
+    if(node->head.nodeClass != UA_NODECLASS_METHOD)
+        return UA_STATUSCODE_BADNODECLASSINVALID;
     node->methodNode.async = *isAsync;
     return UA_STATUSCODE_GOOD;
 }
@@ -389,13 +400,14 @@ UA_Server_processServiceOperationsAsync(UA_Server *server, UA_Session *session,
                                         const UA_DataType *responseOperationsType,
                                         UA_AsyncResponse **ar) {
     size_t ops = *requestOperations;
-    UA_CHECK(ops > 0, return UA_STATUSCODE_BADNOTHINGTODO); 
+    if(ops == 0)
+        return UA_STATUSCODE_BADNOTHINGTODO;
 
     /* Allocate the response array. No padding after size_t */
     void **respPos = (void**)((uintptr_t)responseOperations + sizeof(size_t));
     *respPos = UA_Array_new(ops, responseOperationsType);
-    UA_CHECK(*respPos, return UA_STATUSCODE_BADOUTOFMEMORY);
-    
+    if(!*respPos)
+        return UA_STATUSCODE_BADOUTOFMEMORY;
     *responseOperations = ops;
 
     /* Finish / dispatch the operations. This may allocate a new AsyncResponse internally */
