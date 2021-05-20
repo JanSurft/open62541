@@ -1,5 +1,7 @@
 # Contributing to open62541
 
+Test
+
 Contributions to open62541 include code, documentation, answering user
 questions, running the project's infrastructure, and advocating for all types of
 open62541 users.
