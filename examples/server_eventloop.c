@@ -25,18 +25,35 @@ typedef struct {
     UA_Server *server;
     UA_SecureChannel *channel;
     UA_ServerNetworkLayer *layer;
+    UA_Connection connection;
 } UA_ConnectionContext;
 
 /* In this example, we integrate the server into an external "mainloop". This
    can be for example the event-loop used in GUI toolkits, such as Qt or GTK. */
 
-UA_Connection connection;
-UA_Server *SERVER = NULL;
+// UA_Connection connection;
 
-static UA_StatusCode *UA_Connection_getSendBuffer(UA_Connection *connection, size_t length,
+static UA_StatusCode UA_Connection_getSendBuffer(UA_Connection *connection, size_t length,
                                UA_ByteString *buf) {
-
+    UA_ConnectionManager *cm = connection->cm;
+    return cm->allocNetworkBuffer(cm, connection->connectionId, buf, length);
 }
+
+static UA_StatusCode UA_Connection_send(UA_Connection *connection, UA_ByteString *buf) {
+    UA_ConnectionManager *cm = connection->cm;
+    return cm->sendWithConnection(cm, connection->connectionId, buf);
+}
+
+static
+void UA_Connection_releaseBuffer (UA_Connection *connection, UA_ByteString *buf) {
+    UA_ConnectionManager *cm = connection->cm;
+    cm->freeNetworkBuffer(cm, connection->connectionId, buf);
+}
+
+// /* Release the send buffer manually */
+// void UA_Connection_releaseSendBuffer(UA_Connection *connection, UA_ByteString *buf) {
+//
+// }
 
 
 static void
@@ -48,11 +65,28 @@ connectionCallback(UA_ConnectionManager *cm, uintptr_t connectionId,
     UA_dump_hex_pkg(msg.data, msg.length);
 #endif
 
-    // UA_ConnectionContext *ctx = (UA_ConnectionContext *) *connectionContext;
+    UA_ConnectionContext *ctx = (UA_ConnectionContext *) *connectionContext;
 
-    // UA_StatusCode rv = UA_STATUSCODE_GOOD;
+    UA_StatusCode rv = UA_STATUSCODE_GOOD;
 
-    // if (!ctx->isInitialized) {
+    if (!ctx->isInitialized) {
+
+        // UA_EventLoop_getLogger(cm->eventSource.eventLoop)->log = &ctx->server->config.logger.log;
+
+
+        ctx->connectionId = connectionId;
+        ctx->connection.connectionId = connectionId;
+        ctx->connection.cm = cm;
+        ctx->connection.close = NULL;
+        ctx->connection.free = NULL;
+        ctx->connection.getSendBuffer = UA_Connection_getSendBuffer;
+        ctx->connection.recv = NULL;
+        ctx->connection.releaseRecvBuffer = UA_Connection_releaseBuffer;
+        ctx->connection.releaseSendBuffer = UA_Connection_releaseBuffer;
+        ctx->connection.send = UA_Connection_send;
+        ctx->connection.state = UA_CONNECTIONSTATE_CLOSED;
+        ctx->isInitialized = true;
+    }
 
     //     ctx->connectionId = connectionId;
     //     ctx->layer = &ctx->server->config.networkLayers[0];
@@ -92,7 +126,7 @@ connectionCallback(UA_ConnectionManager *cm, uintptr_t connectionId,
 
 
     if (msg.length > 0) {
-        UA_Server_processBinaryMessage(SERVER, &connection, &msg);
+        UA_Server_processBinaryMessage(ctx->server, &ctx->connection, &msg);
     }
 
 
@@ -111,7 +145,7 @@ connectionCallback(UA_ConnectionManager *cm, uintptr_t connectionId,
 
 static void UA_Server_setup(UA_Server *server) {
 
-    UA_ConnectionContext *ctx = UA_malloc(sizeof(UA_ConnectionContext));
+    UA_ConnectionContext *ctx = (UA_ConnectionContext*) UA_malloc(sizeof(UA_ConnectionContext));
     memset(ctx, 0, sizeof(UA_ConnectionContext));
 
     ctx->server = server;
@@ -123,6 +157,7 @@ static void UA_Server_setup(UA_Server *server) {
     cm->connectionCallback = connectionCallback;
     cm->initialConnectionContext = ctx;
     UA_ConfigParameter_setParameter(&cm->eventSource.parameters, "listen-port", &portVar);
+
     UA_EventLoop_registerEventSource(UA_Server_getConfig(server)->eventLoop, (UA_EventSource *) cm);
 }
 
@@ -134,9 +169,7 @@ int main(int argc, char** argv) {
     UA_ServerConfig *conf = (UA_ServerConfig*) UA_calloc(1, sizeof(UA_ServerConfig));
     UA_ServerConfig_setDefault(conf);
 
-    SERVER = UA_Server_newWithConfig(conf);
-    UA_Server *server = SERVER;
-
+    UA_Server *server = UA_Server_newWithConfig(conf);
     UA_Server_setup(server);
 
     /* Should the server networklayer block (with a timeout) until a message

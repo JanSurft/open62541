@@ -335,9 +335,16 @@ TCP_sendWithConnection(UA_ConnectionManager *cm, uintptr_t connectionId,
         do {
             size_t bytes_to_send = buf->length - nWritten;
             n = UA_send((UA_FD)connectionId,
-                        (const char*)buf->data + nWritten,
+                        (const char*)(buf->data + nWritten),
                         bytes_to_send, flags);
             if(n < 0 && UA_ERRNO != UA_INTERRUPTED && UA_ERRNO != UA_AGAIN) {
+
+                // UA_LOG_ERROR(UA_EventLoop_getLogger(cm->eventSource.eventLoop), UA_LOGCATEGORY_NETWORK,
+                //              "send failed");
+                UA_LOG_SOCKET_ERRNO_GAI_WRAP(
+                    UA_LOG_ERROR(UA_EventLoop_getLogger(cm->eventSource.eventLoop),
+                                   UA_LOGCATEGORY_NETWORK,
+                                   "send failed with error %s", strerror(errno)));
                 TCP_shutdownConnection(cm, connectionId);
                 UA_ByteString_clear(buf);
                 return UA_STATUSCODE_BADCONNECTIONCLOSED;
