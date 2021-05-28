@@ -127,13 +127,18 @@ void UA_sleep_ms(unsigned long ms);
 #define UA_snprintf snprintf
 #define UA_strncasecmp strncasecmp
 
+#define clean_errno() (errno == 0 ? "None" : strerror(errno))
+#define gai_clean_errno() (errno == 0 ? "None" : gai_strerror(errno))
+
 #define UA_LOG_SOCKET_ERRNO_WRAP(LOG) { \
-    char *errno_str = strerror(errno); \
-    LOG; \
+    char *errno_str = clean_errno(); \
+    LOG;                               \
+    errno = 0;                          \
 }
 #define UA_LOG_SOCKET_ERRNO_GAI_WRAP(LOG) { \
-    const char *errno_str = gai_strerror(errno); \
-    LOG; \
+    const char *errno_str = gai_clean_errno(); \
+    LOG;                                    \
+    errno = 0;                              \
 }
 
 #if UA_MULTITHREADING >= 100
