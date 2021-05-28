@@ -9,8 +9,10 @@
 #ifndef UA_PLUGIN_NETWORK_H_
 #define UA_PLUGIN_NETWORK_H_
 
-#include <open62541/util.h>
 #include <open62541/plugin/log.h>
+#include <open62541/util.h>
+
+#include "eventloop.h"
 
 _UA_BEGIN_DECLS
 
@@ -61,6 +63,11 @@ typedef enum {
 
 struct UA_Connection {
     UA_ConnectionState state;
+
+    uintptr_t connectionId;
+
+    struct UA_ConnectionManager *cm;
+
     UA_SecureChannel *channel;     /* The securechannel that is attached to
                                     * this connection */
     UA_SOCKET sockfd;              /* Most connectivity solutions run on

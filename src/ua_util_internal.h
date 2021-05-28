@@ -106,6 +106,12 @@ isTrue(uint8_t expr) {
     return expr;
 }
 
+#ifndef NDEBUG
+#define UA_ASSERT_STATUS(STATUSCODE) UA_assert((STATUSCODE) == UA_STATUSCODE_GOOD)
+#else
+#define UA_ASSERT_STATUS(STATUSCODE)
+#endif
+
 #define UA_CHECK(A, EVAL_ON_ERROR)                                                       \
     do {                                                                                 \
         if(UA_UNLIKELY(!isTrue(A))) {                                                    \
