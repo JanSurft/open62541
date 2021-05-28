@@ -346,6 +346,9 @@ UA_Server_getConfig(UA_Server *server);
 UA_StatusCode UA_EXPORT
 UA_Server_run(UA_Server *server, const volatile UA_Boolean *running);
 
+UA_StatusCode UA_EXPORT
+UA_Server_run_with_eventloop(UA_Server *server, const volatile UA_Boolean *running, UA_EventLoop *el);
+
 /* The prologue part of UA_Server_run (no need to use if you call
  * UA_Server_run) */
 UA_StatusCode UA_EXPORT

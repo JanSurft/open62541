@@ -120,6 +120,8 @@ struct UA_SecureChannel {
     /* The endpoint and context of the channel */
     const UA_SecurityPolicy *securityPolicy;
     void *channelContext; /* For interaction with the security policy */
+
+    /* TODO: remove and replace with only connection id */
     UA_Connection *connection;
 
     /* Asymmetric encryption info */
