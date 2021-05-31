@@ -708,7 +708,6 @@ UA_Server_run_iterate(UA_Server *server, UA_Boolean waitInternal) {
     if(nextRepeated > now)
         timeout = (UA_UInt16)((nextRepeated - now) / UA_DATETIME_MSEC);
     return timeout;
-    return 0;
 }
 
 UA_StatusCode

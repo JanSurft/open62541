@@ -113,22 +113,10 @@ connectionCallback(UA_ConnectionManager *cm, uintptr_t connectionId,
     if (msg.length > 0) {
         UA_Server_processBinaryMessage(ctx->server, &ctx->connection, &msg);
     }
-
-
-    // if(*connectionContext != NULL)
-    //     clientId = connectionId;
-    // if(msg.length == 0 && status == UA_STATUSCODE_GOOD)
-    //     connCount++;
-    // if(status != UA_STATUSCODE_GOOD)
-    //     connCount--;
-    // if(msg.length > 0) {
-    //     UA_ByteString rcv = UA_BYTESTRING(testMsg);
-    //     ck_assert(UA_String_equal(&msg, &rcv));
-    //     received = true;
-    // }
 }
 
-static void UA_Server_setup(UA_Server *server) {
+static void
+UA_Server_setupEventLoop(UA_Server *server) {
 
     UA_ConnectionContext *ctx = (UA_ConnectionContext*) UA_malloc(sizeof(UA_ConnectionContext));
     memset(ctx, 0, sizeof(UA_ConnectionContext));
@@ -154,12 +142,9 @@ int main(int argc, char** argv) {
     UA_ServerConfig *conf = (UA_ServerConfig*) UA_calloc(1, sizeof(UA_ServerConfig));
     UA_ServerConfig_setDefault(conf);
 
-    // UA_Server *server = UA_Server_newWithConfig(conf);
-    // UA_Server_setup(server);
-
     UA_Server *server = UA_Server_new();
-    UA_ServerConfig_setDefault(&server->config);
-    UA_Server_setup(server);
+    UA_ServerConfig_setDefault(UA_Server_getConfig(server));
+    UA_Server_setupEventLoop(server);
 
     /* Should the server networklayer block (with a timeout) until a message
        arrives or should it return immediately? */
@@ -172,15 +157,6 @@ int main(int argc, char** argv) {
     if(rv != UA_STATUSCODE_GOOD)
         goto cleanup;
 
-    // UA_EventLoop *el = UA_Server_getConfig(server)->eventLoop;
-
-    // UA_EventLoop_start(el);
-
-    // UA_EventLoop *el = UA_EventLoop_new(UA_Log_Stdout);
-
-
-    // UA_EventLoop_start(el);
-
     while(running) {
         /* timeout is the maximum possible delay (in millisec) until the next
            _iterate call. Otherwise, the server might miss an internal timeout
@@ -191,7 +167,6 @@ int main(int argc, char** argv) {
          */
 
         UA_EventLoop_run(server->config.eventLoop, 1000000);
-        // UA_UInt16 timeout = UA_Server_run_iterate(server, waitInternal);
     }
     rv = UA_Server_run_shutdown(server);
 

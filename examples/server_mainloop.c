@@ -23,7 +23,7 @@ int main(int argc, char** argv) {
     signal(SIGINT, stopHandler);
     signal(SIGTERM, stopHandler);
 
-    UA_Server *server = UA_Server_new(); //    WithConfig(conf);
+    UA_Server *server = UA_Server_new();
     UA_ServerConfig_setDefault(UA_Server_getConfig(server));
 
     /* Should the server networklayer block (with a timeout) until a message
