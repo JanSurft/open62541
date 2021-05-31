@@ -457,6 +457,13 @@ sendResponse(UA_Server *server, UA_Session *session, UA_SecureChannel *channel,
     if(retval != UA_STATUSCODE_GOOD)
         return retval;
 
+    size_t length = (uintptr_t)mc.buf_pos -
+                        (uintptr_t)mc.messageBuffer.data;
+
+
+    UA_LOG_DEBUG(&server->config.logger, UA_LOGCATEGORY_SERVER, "send message (%s):", responseType->typeName);
+    UA_dump_hex_pkg(mc.messageBuffer.data, length);
+
     /* Finish / send out */
     return UA_MessageContext_finish(&mc);
 }

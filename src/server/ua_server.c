@@ -598,12 +598,12 @@ UA_Server_run_startup(UA_Server *server) {
     result = UA_EventLoop_start(server->config.eventLoop);
     UA_CHECK_STATUS(result, return result);
 
-    // for(size_t i = 0; i < server->config.networkLayersSize; ++i) {
-    //     UA_ServerNetworkLayer *nl = &server->config.networkLayers[i];
-    //     nl->statistics = &server->serverStats.ns;
-    //     result |= nl->start(nl, &server->config.logger, &server->config.customHostname);
-    // }
-    // UA_CHECK_STATUS(result, return result);
+    for(size_t i = 0; i < server->config.networkLayersSize; ++i) {
+        UA_ServerNetworkLayer *nl = &server->config.networkLayers[i];
+        nl->statistics = &server->serverStats.ns;
+        result |= nl->start(nl, &server->config.logger, &server->config.customHostname);
+    }
+    UA_CHECK_STATUS(result, return result);
 
     /* Update the application description to match the previously added
      * discovery urls. We can only do this after the network layer is started
@@ -652,27 +652,27 @@ UA_UInt16
 UA_Server_run_iterate(UA_Server *server, UA_Boolean waitInternal) {
     /* Process repeated work */
 
-    UA_EventLoop_run(server->config.eventLoop, 0);
+    // UA_EventLoop_run(server->config.eventLoop, 1000000);
 
-    // UA_DateTime now = UA_DateTime_nowMonotonic();
-    // UA_DateTime nextRepeated = UA_Timer_process(&server->timer, now,
-    //                  (UA_TimerExecutionCallback)serverExecuteRepeatedCallback, server);
-    // UA_DateTime latest = now + (UA_MAXTIMEOUT * UA_DATETIME_MSEC);
-    // if(nextRepeated > latest)
-    //     nextRepeated = latest;
+    UA_DateTime now = UA_DateTime_nowMonotonic();
+    UA_DateTime nextRepeated = UA_Timer_process(&server->timer, now,
+                     (UA_TimerExecutionCallback)serverExecuteRepeatedCallback, server);
+    UA_DateTime latest = now + (UA_MAXTIMEOUT * UA_DATETIME_MSEC);
+    if(nextRepeated > latest)
+        nextRepeated = latest;
 
-    // UA_UInt16 timeout = 0;
+    UA_UInt16 timeout = 0;
 
-    // /* round always to upper value to avoid timeout to be set to 0
-    // * if(nextRepeated - now) < (UA_DATETIME_MSEC/2) */
-    // if(waitInternal)
-    //     timeout = (UA_UInt16)(((nextRepeated - now) + (UA_DATETIME_MSEC - 1)) / UA_DATETIME_MSEC);
+    /* round always to upper value to avoid timeout to be set to 0
+    * if(nextRepeated - now) < (UA_DATETIME_MSEC/2) */
+    if(waitInternal)
+        timeout = (UA_UInt16)(((nextRepeated - now) + (UA_DATETIME_MSEC - 1)) / UA_DATETIME_MSEC);
 
-    // /* Listen on the networklayer */
-    // for(size_t i = 0; i < server->config.networkLayersSize; ++i) {
-    //     UA_ServerNetworkLayer *nl = &server->config.networkLayers[i];
-    //     nl->listen(nl, server, timeout);
-    // }
+    /* Listen on the networklayer */
+    for(size_t i = 0; i < server->config.networkLayersSize; ++i) {
+        UA_ServerNetworkLayer *nl = &server->config.networkLayers[i];
+        nl->listen(nl, server, timeout);
+    }
 
 #if defined(UA_ENABLE_PUBSUB_MQTT)
     /* Listen on the pubsublayer, but only if the yield function is set */
@@ -685,29 +685,29 @@ UA_Server_run_iterate(UA_Server *server, UA_Boolean waitInternal) {
     }
 #endif
 
-//     UA_LOCK(&server->serviceMutex);
-//
-// #if defined(UA_ENABLE_DISCOVERY_MULTICAST) && (UA_MULTITHREADING < 200)
-//     if(server->config.mdnsEnabled) {
-//         /* TODO multicastNextRepeat does not consider new input data (requests)
-//          * on the socket. It will be handled on the next call. if needed, we
-//          * need to use select with timeout on the multicast socket
-//          * server->mdnsSocket (see example in mdnsd library) on higher level. */
-//         UA_DateTime multicastNextRepeat = 0;
-//         UA_StatusCode hasNext =
-//             iterateMulticastDiscoveryServer(server, &multicastNextRepeat, true);
-//         if(hasNext == UA_STATUSCODE_GOOD && multicastNextRepeat < nextRepeated)
-//             nextRepeated = multicastNextRepeat;
-//     }
-// #endif
-//
-//     UA_UNLOCK(&server->serviceMutex);
-//
-//     now = UA_DateTime_nowMonotonic();
-//     timeout = 0;
-//     if(nextRepeated > now)
-//         timeout = (UA_UInt16)((nextRepeated - now) / UA_DATETIME_MSEC);
-//     return timeout;
+    UA_LOCK(&server->serviceMutex);
+
+#if defined(UA_ENABLE_DISCOVERY_MULTICAST) && (UA_MULTITHREADING < 200)
+    if(server->config.mdnsEnabled) {
+        /* TODO multicastNextRepeat does not consider new input data (requests)
+         * on the socket. It will be handled on the next call. if needed, we
+         * need to use select with timeout on the multicast socket
+         * server->mdnsSocket (see example in mdnsd library) on higher level. */
+        UA_DateTime multicastNextRepeat = 0;
+        UA_StatusCode hasNext =
+            iterateMulticastDiscoveryServer(server, &multicastNextRepeat, true);
+        if(hasNext == UA_STATUSCODE_GOOD && multicastNextRepeat < nextRepeated)
+            nextRepeated = multicastNextRepeat;
+    }
+#endif
+
+    UA_UNLOCK(&server->serviceMutex);
+
+    now = UA_DateTime_nowMonotonic();
+    timeout = 0;
+    if(nextRepeated > now)
+        timeout = (UA_UInt16)((nextRepeated - now) / UA_DATETIME_MSEC);
+    return timeout;
     return 0;
 }
 
