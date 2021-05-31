@@ -23,11 +23,8 @@ int main(int argc, char** argv) {
     signal(SIGINT, stopHandler);
     signal(SIGTERM, stopHandler);
 
-    UA_ServerConfig *conf = (UA_ServerConfig*) UA_calloc(1, sizeof(UA_ServerConfig));
-    UA_ServerConfig_setDefault(conf);
-
-    UA_Server *server = UA_Server_newWithConfig(conf);
-    // UA_ServerConfig_setDefault(UA_Server_getConfig(server));
+    UA_Server *server = UA_Server_new(); //    WithConfig(conf);
+    UA_ServerConfig_setDefault(UA_Server_getConfig(server));
 
     /* Should the server networklayer block (with a timeout) until a message
        arrives or should it return immediately? */

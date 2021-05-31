@@ -78,21 +78,43 @@ UA_LOG_TRACE(const UA_Logger *logger, UA_LogCategory category, const char *msg, 
 #endif
 }
 
+#ifndef NDEBUG
+#define UA_LOG_DEBUG_INTERNAL(LOGGER, CAT, MSG, ...) \
+UA_LOG_DEBUG_RUN(LOGGER, CAT, "" MSG "%s (%s:%d)", __VA_ARGS__, __FILE__, __LINE__);
+
+#define UA_LOG_DEBUG(LOGGER, CAT, ...)                                   \
+    UA_LOG_DEBUG_INTERNAL(LOGGER, CAT, __VA_ARGS__, "")
+
 static UA_INLINE UA_FORMAT(3,4) void
-UA_LOG_DEBUG(const UA_Logger *logger, UA_LogCategory category, const char *msg, ...) {
-#if UA_LOGLEVEL <= 200
+UA_LOG_DEBUG_RUN(const UA_Logger *logger, UA_LogCategory category, const char *msg, ...) {
+    #if UA_LOGLEVEL <= 200
     if(!logger || !logger->log)
         return;
     va_list args; va_start(args, msg);
     logger->log(logger->context, UA_LOGLEVEL_DEBUG, category, msg, args);
     va_end(args);
-#else
+    #else
     (void) logger;
     (void) category;
     (void) msg;
-#endif
+    #endif
 }
-
+#else
+    static UA_INLINE UA_FORMAT(3,4) void
+    UA_LOG_DEBUG(const UA_Logger *logger, UA_LogCategory category, const char *msg, ...) {
+    #if UA_LOGLEVEL <= 200
+        if(!logger || !logger->log)
+            return;
+        va_list args; va_start(args, msg);
+        logger->log(logger->context, UA_LOGLEVEL_DEBUG, category, msg, args);
+        va_end(args);
+    #else
+        (void) logger;
+        (void) category;
+        (void) msg;
+    #endif
+    }
+#endif
 static UA_INLINE UA_FORMAT(3,4) void
 UA_LOG_INFO(const UA_Logger *logger, UA_LogCategory category, const char *msg, ...) {
 #if UA_LOGLEVEL <= 300
