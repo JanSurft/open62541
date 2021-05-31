@@ -509,6 +509,7 @@ UA_PubSubChannelUDPMC_receive(UA_PubSubChannel *channel, UA_ByteString *message,
 #endif
         }
 
+        // TODO: weird timing calculations happen here
         rcvCount++;
         UA_DateTime endtTime = UA_DateTime_nowMonotonic();
         UA_DateTime dataReceiveTime = endtTime - now;

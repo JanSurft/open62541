@@ -50,6 +50,12 @@ void UA_Connection_releaseBuffer (UA_Connection *connection, UA_ByteString *buf)
     cm->freeNetworkBuffer(cm, connection->connectionId, buf);
 }
 
+static void UA_Connection_close(UA_Connection *connection) {
+    UA_ConnectionManager *cm = connection->cm;
+    cm->closeConnection(cm, connection->connectionId);
+}
+
+
 // /* Release the send buffer manually */
 // void UA_Connection_releaseSendBuffer(UA_Connection *connection, UA_ByteString *buf) {
 //
@@ -61,6 +67,21 @@ connectionCallback(UA_ConnectionManager *cm, uintptr_t connectionId,
                    void **connectionContext, UA_StatusCode stat,
                    UA_ByteString msg) {
 
+    UA_LOG_DEBUG(UA_EventLoop_getLogger(cm->eventSource.eventLoop), UA_LOGCATEGORY_SERVER,
+                 "connection callback for id: %lu", connectionId);
+
+    // if (stat != UA_STATUSCODE_GOOD) {
+    //     UA_LOG_DEBUG(UA_EventLoop_getLogger(cm->eventSource.eventLoop), UA_LOGCATEGORY_SERVER, "error");
+    // }
+
+    // UA_CHECK_STATUS_ERROR(
+    //     stat,
+    //     return,
+    //     UA_EventLoop_getLogger(cm->eventSource.eventLoop),
+    //     UA_LOGCATEGORY_SERVER,
+    //     "error"
+    //     )
+
 #ifdef UA_DEBUG_DUMP_PKGS
     UA_dump_hex_pkg(msg.data, msg.length);
 #endif
@@ -70,14 +91,10 @@ connectionCallback(UA_ConnectionManager *cm, uintptr_t connectionId,
     UA_StatusCode rv = UA_STATUSCODE_GOOD;
 
     if (!ctx->isInitialized) {
-
-        // UA_EventLoop_getLogger(cm->eventSource.eventLoop)->log = &ctx->server->config.logger.log;
-
-
         ctx->connectionId = connectionId;
         ctx->connection.connectionId = connectionId;
         ctx->connection.cm = cm;
-        ctx->connection.close = NULL;
+        ctx->connection.close = UA_Connection_close;
         ctx->connection.free = NULL;
         ctx->connection.getSendBuffer = UA_Connection_getSendBuffer;
         ctx->connection.recv = NULL;
@@ -88,42 +105,10 @@ connectionCallback(UA_ConnectionManager *cm, uintptr_t connectionId,
         ctx->isInitialized = true;
     }
 
-    //     ctx->connectionId = connectionId;
-    //     ctx->layer = &ctx->server->config.networkLayers[0];
-
-    //     /* Add a SecureChannel to a new connection */
-    //     if(!ctx->channel) {
-    //         rv = UA_Server_createSecureChannel(ctx->server, connection);
-    //         if(rv != UA_STATUSCODE_GOOD)
-    //             goto error;
-
-    //         channel = connection->channel;
-    //         UA_assert(channel);
-    //     }
-
-
-    //     /* Open a client connection */
-    //     // uintptr_t serverId = connectionId;
-    //     // UA_StatusCode retval = cm->openConnection(cm, UA_STRING("localhost:4840"), (void*)0x01);
-    //     // UA_ASSERT_STATUS(retval);
-
-    //     // for(size_t i = 0; i < 10; i++) {
-    //     //     UA_DateTime next = UA_EventLoop_run(el, 1);
-    //     //     UA_fakeSleep((UA_UInt32)((next - UA_DateTime_now()) / UA_DATETIME_MSEC));
-    //     // }
-
-    //     /* Send a message from the client */
-    //     // received = false;
-    //     // UA_ByteString snd;
-    //     // retval = cm->allocNetworkBuffer(cm, serverId, &snd, strlen(testMsg));
-
-    //     // memcpy(snd.data, testMsg, strlen(testMsg));
-    //     // retval = cm->sendWithConnection(cm, clientId, &snd);
-
-    //     // *connectionContext = &connection;
-    // }
-
-
+    if (ctx->connectionId != connectionId) {
+        ctx->connectionId = connectionId;
+        ctx->connection.connectionId = connectionId;
+    }
 
     if (msg.length > 0) {
         UA_Server_processBinaryMessage(ctx->server, &ctx->connection, &msg);
@@ -197,7 +182,9 @@ int main(int argc, char** argv) {
          * It will be handled on the next call, which may be too late for requesting clients.
          * if needed, the select with timeout on the multicast socket server->mdnsSocket (see example in mdnsd library)
          */
-        UA_UInt16 timeout = UA_Server_run_iterate(server, waitInternal);
+
+        UA_EventLoop_run(server->config.eventLoop, 1000000);
+        // UA_UInt16 timeout = UA_Server_run_iterate(server, waitInternal);
     }
     retval = UA_Server_run_shutdown(server);
 
