@@ -82,9 +82,9 @@ connectionCallback(UA_ConnectionManager *cm, uintptr_t connectionId,
     //     "error"
     //     )
 
-#ifdef UA_DEBUG_DUMP_PKGS
-    UA_dump_hex_pkg(msg.data, msg.length);
-#endif
+// #ifdef UA_DEBUG_DUMP_PKGS
+//     UA_dump_hex_pkg(msg.data, msg.length);
+// #endif
 
     UA_ConnectionContext *ctx = (UA_ConnectionContext *) *connectionContext;
 
@@ -154,15 +154,22 @@ int main(int argc, char** argv) {
     UA_ServerConfig *conf = (UA_ServerConfig*) UA_calloc(1, sizeof(UA_ServerConfig));
     UA_ServerConfig_setDefault(conf);
 
-    UA_Server *server = UA_Server_newWithConfig(conf);
+    // UA_Server *server = UA_Server_newWithConfig(conf);
+    // UA_Server_setup(server);
+
+    UA_Server *server = UA_Server_new();
+    UA_ServerConfig_setDefault(&server->config);
     UA_Server_setup(server);
 
     /* Should the server networklayer block (with a timeout) until a message
        arrives or should it return immediately? */
     UA_Boolean waitInternal = false;
 
-    UA_StatusCode retval = UA_Server_run_startup(server);
-    if(retval != UA_STATUSCODE_GOOD)
+    UA_StatusCode rv = UA_EventLoop_start(server->config.eventLoop);
+    UA_CHECK_STATUS(rv, goto cleanup);
+
+    rv = UA_Server_run_startup(server);
+    if(rv != UA_STATUSCODE_GOOD)
         goto cleanup;
 
     // UA_EventLoop *el = UA_Server_getConfig(server)->eventLoop;
@@ -186,9 +193,9 @@ int main(int argc, char** argv) {
         UA_EventLoop_run(server->config.eventLoop, 1000000);
         // UA_UInt16 timeout = UA_Server_run_iterate(server, waitInternal);
     }
-    retval = UA_Server_run_shutdown(server);
+    rv = UA_Server_run_shutdown(server);
 
  cleanup:
     UA_Server_delete(server);
-    return retval == UA_STATUSCODE_GOOD ? EXIT_SUCCESS : EXIT_FAILURE;
+    return rv == UA_STATUSCODE_GOOD ? EXIT_SUCCESS : EXIT_FAILURE;
 }

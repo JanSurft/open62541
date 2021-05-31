@@ -595,8 +595,8 @@ UA_Server_run_startup(UA_Server *server) {
     /* Start the networklayers */
     UA_StatusCode result = UA_STATUSCODE_GOOD;
 
-    result = UA_EventLoop_start(server->config.eventLoop);
-    UA_CHECK_STATUS(result, return result);
+    // result = UA_EventLoop_start(server->config.eventLoop);
+    // UA_CHECK_STATUS(result, return result);
 
     for(size_t i = 0; i < server->config.networkLayersSize; ++i) {
         UA_ServerNetworkLayer *nl = &server->config.networkLayers[i];
