@@ -615,10 +615,13 @@ UA_StatusCode
 UA_Client_addRepeatedCallback(UA_Client *client, UA_ClientCallback callback,
                               void *data, UA_Double interval_ms, UA_UInt64 *callbackId) {
 
-    return UA_EventLoop_addCyclicCallback(&client->config.)
-    return UA_Timer_addRepeatedCallback(&client->timer, (UA_ApplicationCallback)callback,
-                                        client, data, interval_ms, NULL,
-                                        UA_TIMER_HANDLE_CYCLEMISS_WITH_CURRENTTIME, callbackId);
+    return UA_EventLoop_addCyclicCallback(
+        client->config.eventLoop, (UA_ApplicationCallback)callback, client, data,
+        interval_ms, NULL, UA_TIMER_HANDLE_CYCLEMISS_WITH_CURRENTTIME, callbackId);
+
+    // return UA_Timer_addRepeatedCallback(&client->timer, (UA_ApplicationCallback)callback,
+    //                                     client, data, interval_ms, NULL,
+    //                                     UA_TIMER_HANDLE_CYCLEMISS_WITH_CURRENTTIME, callbackId);
 }
 
 UA_StatusCode
