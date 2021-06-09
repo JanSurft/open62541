@@ -71,6 +71,20 @@ UA_ClientConfig_clear(UA_ClientConfig *config) {
     UA_free(config->securityPolicies);
     config->securityPolicies = 0;
 
+    /* Stop and delete the EventLoop */
+    if(config->eventLoop && !config->externalEventLoop) {
+        if(UA_EventLoop_getState(config->eventLoop) != UA_EVENTLOOPSTATE_FRESH &&
+           UA_EventLoop_getState(config->eventLoop) != UA_EVENTLOOPSTATE_STOPPED) {
+            UA_EventLoop_stop(config->eventLoop);
+            while(UA_EventLoop_getState(config->eventLoop) != UA_EVENTLOOPSTATE_STOPPED) {
+                UA_EventLoop_run(config->eventLoop, 100);
+            }
+        }
+        UA_EventLoop_delete(config->eventLoop);
+        config->eventLoop = NULL;
+    }
+
+
     /* Logger */
     if(config->logger.clear)
         config->logger.clear(config->logger.context);
@@ -600,6 +614,8 @@ UA_Client_addTimedCallback(UA_Client *client, UA_ClientCallback callback,
 UA_StatusCode
 UA_Client_addRepeatedCallback(UA_Client *client, UA_ClientCallback callback,
                               void *data, UA_Double interval_ms, UA_UInt64 *callbackId) {
+
+    return UA_EventLoop_addCyclicCallback(&client->config.)
     return UA_Timer_addRepeatedCallback(&client->timer, (UA_ApplicationCallback)callback,
                                         client, data, interval_ms, NULL,
                                         UA_TIMER_HANDLE_CYCLEMISS_WITH_CURRENTTIME, callbackId);
