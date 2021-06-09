@@ -453,7 +453,7 @@ UA_EventLoop_run(UA_EventLoop *el, UA_UInt32 timeout) {
 
     /* Process cyclic callbacks */
     UA_DateTime now = UA_DateTime_nowMonotonic();
-    UA_DateTime timeToNextCallback = processTimer(el, UA_DateTime_nowMonotonic());
+    UA_DateTime timeToNextCallback = processTimer(el, now);
 
     UA_DateTime callbackTimeout = timeToNextCallback - now;
     UA_DateTime maxTimeout = timeout * UA_DATETIME_MSEC;
