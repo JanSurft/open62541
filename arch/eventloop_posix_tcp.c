@@ -174,8 +174,8 @@ TCP_listenSocketCallback(UA_ConnectionManager *cm, UA_FD fd,
     /* Register in the EventLoop. Signal to the user if registering failed. */
     res = UA_EventLoop_registerFD(cm->eventSource.eventLoop, newsockfd,
                                   UA_POSIX_EVENT_READ,
-                                  (void (*)(struct UA_EventSource *, int, void *, short))
-                                  TCP_connectionSocketCallback, &cm->eventSource, ctx);
+                                  (UA_FDCallback) TCP_connectionSocketCallback,
+                                  &cm->eventSource, ctx);
     if(res != UA_STATUSCODE_GOOD) {
         cm->connectionCallback(cm, (uintptr_t)fd, &ctx,
                                UA_STATUSCODE_BADINTERNALERROR, UA_BYTESTRING_NULL);

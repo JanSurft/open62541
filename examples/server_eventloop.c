@@ -61,6 +61,11 @@ static void UA_Connection_close(UA_Connection *connection) {
 //
 // }
 
+typedef struct {
+    bool dummy;
+} Dummy ;
+
+Dummy global_dummy = {false};
 
 static void
 connectionCallback(UA_ConnectionManager *cm, uintptr_t connectionId,
@@ -84,35 +89,37 @@ connectionCallback(UA_ConnectionManager *cm, uintptr_t connectionId,
 
 // #ifdef UA_DEBUG_DUMP_PKGS
 //     UA_dump_hex_pkg(msg.data, msg.length);
-// #endif
+// #endi
+    //
+    *connectionContext = &global_dummy;
 
-    UA_ConnectionContext *ctx = (UA_ConnectionContext *) *connectionContext;
+    // UA_ConnectionContext *ctx = (UA_ConnectionContext *) *connectionContext;
 
-    UA_StatusCode rv = UA_STATUSCODE_GOOD;
+    // UA_StatusCode rv = UA_STATUSCODE_GOOD;
 
-    if (!ctx->isInitialized) {
-        ctx->connectionId = connectionId;
-        ctx->connection.connectionId = connectionId;
-        ctx->connection.cm = cm;
-        ctx->connection.close = UA_Connection_close;
-        ctx->connection.free = NULL;
-        ctx->connection.getSendBuffer = UA_Connection_getSendBuffer;
-        ctx->connection.recv = NULL;
-        ctx->connection.releaseRecvBuffer = UA_Connection_releaseBuffer;
-        ctx->connection.releaseSendBuffer = UA_Connection_releaseBuffer;
-        ctx->connection.send = UA_Connection_send;
-        ctx->connection.state = UA_CONNECTIONSTATE_CLOSED;
-        ctx->isInitialized = true;
-    }
+    // if (!ctx->isInitialized) {
+    //     ctx->connectionId = connectionId;
+    //     ctx->connection.connectionId = connectionId;
+    //     ctx->connection.cm = cm;
+    //     ctx->connection.close = UA_Connection_close;
+    //     ctx->connection.free = NULL;
+    //     ctx->connection.getSendBuffer = UA_Connection_getSendBuffer;
+    //     ctx->connection.recv = NULL;
+    //     ctx->connection.releaseRecvBuffer = UA_Connection_releaseBuffer;
+    //     ctx->connection.releaseSendBuffer = UA_Connection_releaseBuffer;
+    //     ctx->connection.send = UA_Connection_send;
+    //     ctx->connection.state = UA_CONNECTIONSTATE_CLOSED;
+    //     ctx->isInitialized = true;
+    // }
 
-    if (ctx->connectionId != connectionId) {
-        ctx->connectionId = connectionId;
-        ctx->connection.connectionId = connectionId;
-    }
+    // if (ctx->connectionId != connectionId) {
+    //     ctx->connectionId = connectionId;
+    //     ctx->connection.connectionId = connectionId;
+    // }
 
-    if (msg.length > 0) {
-        UA_Server_processBinaryMessage(ctx->server, &ctx->connection, &msg);
-    }
+    // if (msg.length > 0) {
+    //     UA_Server_processBinaryMessage(ctx->server, &ctx->connection, &msg);
+    // }
 }
 
 static void
@@ -122,6 +129,14 @@ UA_Server_setupEventLoop(UA_Server *server) {
     memset(ctx, 0, sizeof(UA_ConnectionContext));
 
     ctx->server = server;
+    ctx->connection.close = UA_Connection_close;
+    ctx->connection.free = NULL;
+    ctx->connection.getSendBuffer = UA_Connection_getSendBuffer;
+    ctx->connection.recv = NULL;
+    ctx->connection.releaseRecvBuffer = UA_Connection_releaseBuffer;
+    ctx->connection.releaseSendBuffer = UA_Connection_releaseBuffer;
+    ctx->connection.send = UA_Connection_send;
+    ctx->connection.state = UA_CONNECTIONSTATE_CLOSED;
 
     UA_UInt16 port = 4840;
     UA_Variant portVar;
