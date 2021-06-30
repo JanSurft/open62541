@@ -358,7 +358,7 @@ TCP_sendWithConnection(UA_ConnectionManager *cm, uintptr_t connectionId,
                 UA_LOG_SOCKET_ERRNO_GAI_WRAP(
                     UA_LOG_ERROR(UA_EventLoop_getLogger(cm->eventSource.eventLoop),
                                    UA_LOGCATEGORY_NETWORK,
-                                   "send failed with error %s", strerror(errno)));
+                                   "send failed with error %s", errno_str));
                 TCP_shutdownConnection(cm, connectionId);
                 UA_ByteString_clear(buf);
                 return UA_STATUSCODE_BADCONNECTIONCLOSED;
