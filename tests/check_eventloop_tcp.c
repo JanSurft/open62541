@@ -59,6 +59,54 @@ connectionCallback(UA_ConnectionManager *cm, uintptr_t connectionId,
         received = true;
     }
 }
+START_TEST(connectTCPContextTest) {
+        el = UA_EventLoop_new(UA_Log_Stdout);
+
+        UA_UInt16 port = 4840;
+        UA_Variant portVar;
+        UA_Variant_setScalar(&portVar, &port, &UA_TYPES[UA_TYPES_UINT16]);
+        UA_ConnectionManager *cm = UA_ConnectionManager_TCP_new(UA_STRING("tcpCM"));
+        cm->connectionCallback = connectionCallback;
+        UA_ConfigParameter_setParameter(&cm->eventSource.parameters, "listen-port", &portVar);
+        UA_EventLoop_registerEventSource(el, &cm->eventSource);
+
+        connCount = 0;
+        UA_EventLoop_start(el);
+
+        /* Open a client connection */
+        clientId = 0;
+        UA_StatusCode retval = cm->openConnection(cm, UA_STRING("localhost:4840"), (void*)0x01);
+
+        ck_assert_uint_eq(retval, UA_STATUSCODE_GOOD);
+
+        UA_EventLoop_run(el, 1);
+        ck_assert(clientId != 0);
+        ck_assert_uint_eq(connCount, 2);
+
+        /* Send a message from the client */
+        received = false;
+        UA_ByteString snd;
+        retval = cm->allocNetworkBuffer(cm, clientId, &snd, strlen(testMsg));
+        ck_assert_uint_eq(retval, UA_STATUSCODE_GOOD);
+        memcpy(snd.data, testMsg, strlen(testMsg));
+        retval = cm->sendWithConnection(cm, clientId, &snd);
+        ck_assert_uint_eq(retval, UA_STATUSCODE_GOOD);
+        UA_EventLoop_run(el, 1);
+        ck_assert(received);
+
+        /* Close the connection */
+        retval = cm->closeConnection(cm, clientId);
+        ck_assert_uint_eq(retval, UA_STATUSCODE_GOOD);
+        ck_assert_uint_eq(connCount, 2);
+        UA_EventLoop_run(el, 1);
+        ck_assert_uint_eq(connCount, 0);
+
+        /* Stop the EventLoop */
+        UA_EventLoop_stop(el);
+        UA_EventLoop_run(el, 1);
+        UA_EventLoop_delete(el);
+        el = NULL;
+    } END_TEST
 
 START_TEST(connectTCP) {
     el = UA_EventLoop_new(UA_Log_Stdout);
@@ -124,6 +172,7 @@ int main(void) {
     TCase *tc = tcase_create("test cases");
     tcase_add_test(tc, listenTCP);
     tcase_add_test(tc, connectTCP);
+    tcase_add_test(tc, connectTCPContextTest);
     suite_add_tcase(s, tc);
 
     SRunner *sr = srunner_create(s);
