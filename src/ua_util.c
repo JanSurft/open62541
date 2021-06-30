@@ -365,36 +365,6 @@ UA_ConfigParameter_setParameter(UA_ConfigParameter **cp, const char *name,
     return UA_STATUSCODE_GOOD;
 }
 
-const UA_Variant *
-UA_ConfigParameter_getParameter(UA_ConfigParameter *cp, const char *name) {
-    while(cp) {
-        if(strcmp(name, cp->name) == 0)
-            return &cp->param;
-        cp = cp->next;
-    }
-    return NULL;
-}
-
-/* Returns NULL if the parameter is not defined or not of the right datatype */
-const UA_Variant *
-UA_ConfigParameter_getScalarParameter(UA_ConfigParameter *cp, const char *name,
-                                      const UA_DataType *type) {
-    const UA_Variant *v = UA_ConfigParameter_getParameter(cp, name);
-    if(!v || !UA_Variant_hasScalarType(v, type))
-        return NULL;
-    return v;
-}
-
-const UA_Variant *
-UA_ConfigParameter_getArrayParameter(UA_ConfigParameter *cp, const char *name,
-                                     const UA_DataType *type) {
-    const UA_Variant *v = UA_ConfigParameter_getParameter(cp, name);
-    if(!v || !UA_Variant_hasArrayType(v, type))
-        return NULL;
-    return v;
-}
-
-void
 UA_ConfigParameter_delete(UA_ConfigParameter **cp) {
     UA_ConfigParameter *cp2 = *cp;
     while(cp2) {

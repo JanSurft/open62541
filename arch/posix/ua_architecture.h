@@ -129,15 +129,14 @@ void UA_sleep_ms(unsigned long ms);
 
 #define UA_clean_errno(STR_FUN) (errno == 0 ? "None" : (STR_FUN)(errno))
 
-
 #define UA_LOG_SOCKET_ERRNO_WRAP(LOG) { \
     char *errno_str = UA_clean_errno(strerror); \
-    LOG;                               \
+    LOG; \
     errno = 0; \
 }
 #define UA_LOG_SOCKET_ERRNO_GAI_WRAP(LOG) { \
     const char *errno_str = UA_clean_errno(gai_strerror); \
-    LOG;                                    \
+    LOG; \
     errno = 0; \
 }
 
