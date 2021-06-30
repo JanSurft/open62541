@@ -163,7 +163,7 @@ int main(int argc, char** argv) {
 
     /* Should the server networklayer block (with a timeout) until a message
        arrives or should it return immediately? */
-    UA_Boolean waitInternal = false;
+    // UA_Boolean waitInternal = false;
 
     UA_StatusCode rv = UA_EventLoop_start(server->config.eventLoop);
     UA_CHECK_STATUS(rv, goto cleanup);
