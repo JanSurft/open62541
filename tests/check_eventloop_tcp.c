@@ -43,6 +43,15 @@ static char *testMsg = "open62541";
 static uintptr_t clientId;
 static UA_Boolean received;
 
+typedef struct {
+    bool isInitial;
+} ConnectionContext;
+
+typedef struct {
+    ConnectionContext base;
+    uintptr_t fd;
+} FDConnectionContext;
+
 static void
 connectionCallback(UA_ConnectionManager *cm, uintptr_t connectionId,
                    void **connectionContext, UA_StatusCode status,
@@ -59,6 +68,30 @@ connectionCallback(UA_ConnectionManager *cm, uintptr_t connectionId,
         received = true;
     }
 }
+
+static void
+connectionContextCallback(UA_ConnectionManager *cm, uintptr_t connectionId,
+                   void **connectionContext, UA_StatusCode status,
+                   UA_ByteString msg) {
+
+    if (*connectionContext == NULL) {
+        clientId = connectionId;
+        return;
+    }
+
+    ConnectionContext *ctx = (ConnectionContext*) *connectionContext;
+
+    if (ctx->isInitial) {
+        FDConnectionContext *fdCtx = (FDConnectionContext*) calloc(1, sizeof(FDConnectionContext));
+        fdCtx->base.isInitial = 0;
+        fdCtx->fd = connectionId;
+        *connectionContext = fdCtx;
+    } else {
+        FDConnectionContext *fdCtx = (FDConnectionContext*) ctx;
+        ck_assert_int_eq(fdCtx->fd, connectionId);
+    }
+}
+
 START_TEST(connectTCPContextTest) {
         el = UA_EventLoop_new(UA_Log_Stdout);
 
@@ -66,7 +99,10 @@ START_TEST(connectTCPContextTest) {
         UA_Variant portVar;
         UA_Variant_setScalar(&portVar, &port, &UA_TYPES[UA_TYPES_UINT16]);
         UA_ConnectionManager *cm = UA_ConnectionManager_TCP_new(UA_STRING("tcpCM"));
-        cm->connectionCallback = connectionCallback;
+
+        ConnectionContext initialContext = {true};
+        cm->connectionCallback = connectionContextCallback;
+        cm->initialConnectionContext = &initialContext;
         UA_ConfigParameter_setParameter(&cm->eventSource.parameters, "listen-port", &portVar);
         UA_EventLoop_registerEventSource(el, &cm->eventSource);
 
@@ -75,13 +111,14 @@ START_TEST(connectTCPContextTest) {
 
         /* Open a client connection */
         clientId = 0;
-        UA_StatusCode retval = cm->openConnection(cm, UA_STRING("localhost:4840"), (void*)0x01);
+        UA_StatusCode retval = cm->openConnection(cm, UA_STRING("localhost:4840"), NULL);
 
         ck_assert_uint_eq(retval, UA_STATUSCODE_GOOD);
-
-        UA_EventLoop_run(el, 1);
+        for(size_t i = 0; i < 10; i++) {
+            UA_DateTime next = UA_EventLoop_run(el, 1);
+            UA_fakeSleep((UA_UInt32)((next - UA_DateTime_now()) / UA_DATETIME_MSEC));
+        }
         ck_assert(clientId != 0);
-        ck_assert_uint_eq(connCount, 2);
 
         /* Send a message from the client */
         received = false;
@@ -91,19 +128,28 @@ START_TEST(connectTCPContextTest) {
         memcpy(snd.data, testMsg, strlen(testMsg));
         retval = cm->sendWithConnection(cm, clientId, &snd);
         ck_assert_uint_eq(retval, UA_STATUSCODE_GOOD);
-        UA_EventLoop_run(el, 1);
+        for(size_t i = 0; i < 10; i++) {
+            UA_DateTime next = UA_EventLoop_run(el, 1);
+            UA_fakeSleep((UA_UInt32)((next - UA_DateTime_now()) / UA_DATETIME_MSEC));
+        }
         ck_assert(received);
 
         /* Close the connection */
         retval = cm->closeConnection(cm, clientId);
         ck_assert_uint_eq(retval, UA_STATUSCODE_GOOD);
-        ck_assert_uint_eq(connCount, 2);
-        UA_EventLoop_run(el, 1);
+
+        for(size_t i = 0; i < 10; i++) {
+            UA_DateTime next = UA_EventLoop_run(el, 1);
+            UA_fakeSleep((UA_UInt32)((next - UA_DateTime_now()) / UA_DATETIME_MSEC));
+        }
         ck_assert_uint_eq(connCount, 0);
 
         /* Stop the EventLoop */
         UA_EventLoop_stop(el);
-        UA_EventLoop_run(el, 1);
+        for(size_t i = 0; i < 10; i++) {
+            UA_DateTime next = UA_EventLoop_run(el, 1);
+            UA_fakeSleep((UA_UInt32)((next - UA_DateTime_now()) / UA_DATETIME_MSEC));
+        }
         UA_EventLoop_delete(el);
         el = NULL;
     } END_TEST
