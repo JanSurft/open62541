@@ -11,6 +11,9 @@ if(NOT MSVC AND UA_ENABLE_UNIT_TESTS_MEMCHECK)
     find_package(Valgrind REQUIRED)
 endif()
 
+add_definitions(-Wno-unused-function)
+add_definitions(-Wno-unused-variable)
+
 if(APPLE)
     # CLang on Apple complains about many cases like this:
     # /Users/travis/build/open62541/open62541/tests/check_chunking.c:148:22: warning: implicit conversion changes signedness: 'size_t' (aka 'unsigned long') to 'intmax_t' (aka 'long') [-Wsign-conversion]
