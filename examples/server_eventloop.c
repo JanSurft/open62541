@@ -18,13 +18,15 @@ static void stopHandler(int sign) {
     UA_LOG_INFO(UA_Log_Stdout, UA_LOGCATEGORY_SERVER, "received ctrl-c");
     running = false;
 }
+typedef struct {
+    UA_Boolean isInitial;
+    UA_ConnectionManager *cm;
+    UA_Server *server;
+} UA_BasicConnectionContext;
 
 typedef struct {
+    UA_BasicConnectionContext base;
     uintptr_t connectionId;
-    UA_Boolean isInitialized;
-    UA_Server *server;
-    UA_SecureChannel *channel;
-    UA_ServerNetworkLayer *layer;
     UA_Connection connection;
 } UA_ConnectionContext;
 
@@ -35,24 +37,28 @@ typedef struct {
 
 static UA_StatusCode UA_Connection_getSendBuffer(UA_Connection *connection, size_t length,
                                UA_ByteString *buf) {
-    UA_ConnectionManager *cm = connection->cm;
-    return cm->allocNetworkBuffer(cm, connection->connectionId, buf, length);
+    UA_ConnectionContext *ctx = (UA_ConnectionContext *) connection->handle;
+    UA_ConnectionManager *cm = ((UA_BasicConnectionContext *)ctx)->cm;
+    return cm->allocNetworkBuffer(cm, ctx->connectionId, buf, length);
 }
 
 static UA_StatusCode UA_Connection_send(UA_Connection *connection, UA_ByteString *buf) {
-    UA_ConnectionManager *cm = connection->cm;
-    return cm->sendWithConnection(cm, connection->connectionId, buf);
+    UA_ConnectionContext *ctx = (UA_ConnectionContext *) connection->handle;
+    UA_ConnectionManager *cm = ((UA_BasicConnectionContext *)ctx)->cm;
+    return cm->sendWithConnection(cm, ctx->connectionId, buf);
 }
 
 static
 void UA_Connection_releaseBuffer (UA_Connection *connection, UA_ByteString *buf) {
-    UA_ConnectionManager *cm = connection->cm;
-    cm->freeNetworkBuffer(cm, connection->connectionId, buf);
+    UA_ConnectionContext *ctx = (UA_ConnectionContext *) connection->handle;
+    UA_ConnectionManager *cm = ((UA_BasicConnectionContext *)ctx)->cm;
+    cm->freeNetworkBuffer(cm, ctx->connectionId, buf);
 }
 
 static void UA_Connection_close(UA_Connection *connection) {
-    UA_ConnectionManager *cm = connection->cm;
-    cm->closeConnection(cm, connection->connectionId);
+    UA_ConnectionContext *ctx = (UA_ConnectionContext *) connection->handle;
+    UA_ConnectionManager *cm = ((UA_BasicConnectionContext *)ctx)->cm;
+    cm->closeConnection(cm, ctx->connectionId);
 }
 
 
@@ -91,57 +97,55 @@ connectionCallback(UA_ConnectionManager *cm, uintptr_t connectionId,
 //     UA_dump_hex_pkg(msg.data, msg.length);
 // #endi
     //
-    *connectionContext = &global_dummy;
-
-    // UA_ConnectionContext *ctx = (UA_ConnectionContext *) *connectionContext;
+    UA_BasicConnectionContext *ctx = (UA_BasicConnectionContext *) *connectionContext;
 
     // UA_StatusCode rv = UA_STATUSCODE_GOOD;
 
-    // if (!ctx->isInitialized) {
-    //     ctx->connectionId = connectionId;
-    //     ctx->connection.connectionId = connectionId;
-    //     ctx->connection.cm = cm;
-    //     ctx->connection.close = UA_Connection_close;
-    //     ctx->connection.free = NULL;
-    //     ctx->connection.getSendBuffer = UA_Connection_getSendBuffer;
-    //     ctx->connection.recv = NULL;
-    //     ctx->connection.releaseRecvBuffer = UA_Connection_releaseBuffer;
-    //     ctx->connection.releaseSendBuffer = UA_Connection_releaseBuffer;
-    //     ctx->connection.send = UA_Connection_send;
-    //     ctx->connection.state = UA_CONNECTIONSTATE_CLOSED;
-    //     ctx->isInitialized = true;
-    // }
+    if (ctx->isInitial) {
+        UA_ConnectionContext *newCtx = (UA_ConnectionContext*) calloc(1, sizeof(UA_ConnectionContext));
+        newCtx->base.isInitial = false;
+        newCtx->base.cm = ctx->cm;
+        newCtx->base.server = ctx->server;
+        newCtx->connectionId = connectionId;
+        newCtx->connection.close = UA_Connection_close;
+        newCtx->connection.free = NULL;
+        newCtx->connection.getSendBuffer = UA_Connection_getSendBuffer;
+        newCtx->connection.recv = NULL;
+        newCtx->connection.releaseRecvBuffer = UA_Connection_releaseBuffer;
+        newCtx->connection.releaseSendBuffer = UA_Connection_releaseBuffer;
+        newCtx->connection.send = UA_Connection_send;
+        newCtx->connection.state = UA_CONNECTIONSTATE_CLOSED;
 
+        newCtx->connection.handle = newCtx;
+
+        *connectionContext = newCtx;
+    }
+
+    UA_ConnectionContext *conCtx = (UA_ConnectionContext *) *connectionContext;
     // if (ctx->connectionId != connectionId) {
     //     ctx->connectionId = connectionId;
     //     ctx->connection.connectionId = connectionId;
     // }
 
-    // if (msg.length > 0) {
-    //     UA_Server_processBinaryMessage(ctx->server, &ctx->connection, &msg);
-    // }
+    if (msg.length > 0) {
+        UA_Server_processBinaryMessage(ctx->server, &conCtx->connection, &msg);
+    }
 }
 
 static void
 UA_Server_setupEventLoop(UA_Server *server) {
 
-    UA_ConnectionContext *ctx = (UA_ConnectionContext*) UA_malloc(sizeof(UA_ConnectionContext));
-    memset(ctx, 0, sizeof(UA_ConnectionContext));
+    UA_BasicConnectionContext *ctx = (UA_BasicConnectionContext*) UA_malloc(sizeof(UA_ConnectionContext));
+    memset(ctx, 0, sizeof(UA_BasicConnectionContext));
 
     ctx->server = server;
-    ctx->connection.close = UA_Connection_close;
-    ctx->connection.free = NULL;
-    ctx->connection.getSendBuffer = UA_Connection_getSendBuffer;
-    ctx->connection.recv = NULL;
-    ctx->connection.releaseRecvBuffer = UA_Connection_releaseBuffer;
-    ctx->connection.releaseSendBuffer = UA_Connection_releaseBuffer;
-    ctx->connection.send = UA_Connection_send;
-    ctx->connection.state = UA_CONNECTIONSTATE_CLOSED;
+    ctx->isInitial = true;
 
     UA_UInt16 port = 4840;
     UA_Variant portVar;
     UA_Variant_setScalar(&portVar, &port, &UA_TYPES[UA_TYPES_UINT16]);
     UA_ConnectionManager *cm = UA_ConnectionManager_TCP_new(UA_STRING("tcpCM"));
+    ctx->cm = cm;
     cm->connectionCallback = connectionCallback;
     cm->initialConnectionContext = ctx;
     UA_ConfigParameter_setParameter(&cm->eventSource.parameters, "listen-port", &portVar);
