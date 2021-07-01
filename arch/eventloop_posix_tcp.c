@@ -167,10 +167,12 @@ TCP_listenSocketCallback(UA_ConnectionManager *cm, UA_FD fd,
 
     /* The socket has opened. Signal it to the application. The callback can
      * switch out the context. So put it into a temp variable.  */
-    void *ctx = cm->initialConnectionContext;
-    cm->connectionCallback(cm, (uintptr_t)fd, &ctx, UA_STATUSCODE_GOOD,
+    void *fdctx_address = NULL;
+    UA_EventLoop_getFDContext(cm->eventSource.eventLoop, fd, &fdctx_address);
+    cm->connectionCallback(cm, (uintptr_t)fd, (void **) fdctx_address, UA_STATUSCODE_GOOD,
                            UA_BYTESTRING_NULL);
 
+    void *ctx = cm->initialConnectionContext;
     /* Register in the EventLoop. Signal to the user if registering failed. */
     res = UA_EventLoop_registerFD(cm->eventSource.eventLoop, newsockfd,
                                   UA_POSIX_EVENT_READ,
@@ -266,7 +268,7 @@ TCP_registerListenSocket(UA_ConnectionManager *cm, struct addrinfo *ai) {
         UA_EventLoop_registerFD(cm->eventSource.eventLoop, listenSocket,
                                 UA_POSIX_EVENT_READ,
                                 (void (*)(struct UA_EventSource *, int, void *, short))
-                                TCP_listenSocketCallback, &cm->eventSource, NULL);
+                                TCP_listenSocketCallback, &cm->eventSource, cm->initialConnectionContext);
     if(res != UA_STATUSCODE_GOOD) {
         UA_LOG_WARNING(UA_EventLoop_getLogger(cm->eventSource.eventLoop),
                        UA_LOGCATEGORY_NETWORK,
