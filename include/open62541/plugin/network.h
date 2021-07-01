@@ -64,10 +64,6 @@ typedef enum {
 struct UA_Connection {
     UA_ConnectionState state;
 
-    uintptr_t connectionId;
-
-    struct UA_ConnectionManager *cm;
-
     UA_SecureChannel *channel;     /* The securechannel that is attached to
                                     * this connection */
     UA_SOCKET sockfd;              /* Most connectivity solutions run on
