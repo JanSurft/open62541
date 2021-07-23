@@ -858,6 +858,100 @@ UA_ClientConnectionTCP_poll(UA_Connection *connection, UA_UInt32 timeout,
     return UA_STATUSCODE_GOOD;
 }
 
+// typedef struct {
+//     UA_Boolean isInitial;
+//     UA_ConnectionManager *cm;
+//     UA_Client *client;
+// } UA_BasicConnectionContext;
+//
+// typedef struct {
+//     UA_BasicConnectionContext base;
+//     uintptr_t connectionId;
+//     UA_Connection connection;
+// } UA_ConnectionContext;
+
+UA_StatusCode
+UA_ClientConnectionEventloopTCP_poll(UA_Connection *connection, UA_UInt32 timeout,
+                            const UA_Logger *logger) {
+    return UA_ClientConnectionTCP_poll(connection, timeout, logger);
+    // UA_ConnectionContext *ctx = (UA_ConnectionContext *) connection->handle;
+    // UA_ConnectionManager *cm = ctx->base.cm;
+    // cm->openConnection(cm, )
+}
+
+
+UA_Connection
+UA_ClientConnectionEventloopTCP_init(UA_ConnectionConfig config, const UA_String endpointUrl,
+                            UA_UInt32 timeout, const UA_Logger *logger) {
+    UA_initialize_architecture_network();
+
+    UA_Connection connection;
+    memset(&connection, 0, sizeof(UA_Connection));
+
+    connection.state = UA_CONNECTIONSTATE_OPENING;
+    connection.sockfd = UA_INVALID_SOCKET;
+    connection.send = connection_write;
+    connection.recv = connection_recv;
+    connection.close = ClientNetworkLayerTCP_close;
+    connection.free = ClientNetworkLayerTCP_free;
+    connection.getSendBuffer = connection_getsendbuffer;
+    connection.releaseSendBuffer = connection_releasesendbuffer;
+    connection.releaseRecvBuffer = connection_releaserecvbuffer;
+
+    TCPClientConnection *tcpClientConnection = (TCPClientConnection*)
+        UA_malloc(sizeof(TCPClientConnection));
+    if(!tcpClientConnection) {
+        connection.state = UA_CONNECTIONSTATE_CLOSED;
+        return connection;
+    }
+    memset(tcpClientConnection, 0, sizeof(TCPClientConnection));
+    connection.handle = (void*) tcpClientConnection;
+    tcpClientConnection->timeout = timeout;
+    UA_String hostnameString = UA_STRING_NULL;
+    UA_String pathString = UA_STRING_NULL;
+    UA_UInt16 port = 0;
+    char hostname[512];
+    tcpClientConnection->connStart = UA_DateTime_nowMonotonic();
+    UA_String_copy(&endpointUrl, &tcpClientConnection->endpointUrl);
+
+    UA_StatusCode parse_retval =
+        UA_parseEndpointUrl(&endpointUrl, &hostnameString, &port, &pathString);
+    if(parse_retval != UA_STATUSCODE_GOOD || hostnameString.length > 511) {
+        UA_LOG_WARNING(logger, UA_LOGCATEGORY_NETWORK,
+                       "Server url is invalid: %.*s",
+                       (int)endpointUrl.length, endpointUrl.data);
+        connection.state = UA_CONNECTIONSTATE_CLOSED;
+        return connection;
+    }
+    memcpy(hostname, hostnameString.data, hostnameString.length);
+    hostname[hostnameString.length] = 0;
+
+    if(port == 0) {
+        port = 4840;
+        UA_LOG_INFO(logger, UA_LOGCATEGORY_NETWORK,
+                    "No port defined, using default port %" PRIu16, port);
+    }
+
+    memset(&tcpClientConnection->hints, 0, sizeof(tcpClientConnection->hints));
+    tcpClientConnection->hints.ai_family = AF_UNSPEC;
+    tcpClientConnection->hints.ai_socktype = SOCK_STREAM;
+    char portStr[6];
+    UA_snprintf(portStr, 6, "%d", port);
+    int error = UA_getaddrinfo(hostname, portStr, &tcpClientConnection->hints,
+                               &tcpClientConnection->server);
+    if(error != 0 || !tcpClientConnection->server) {
+        UA_LOG_SOCKET_ERRNO_GAI_WRAP(UA_LOG_WARNING(logger, UA_LOGCATEGORY_NETWORK,
+                                                    "DNS lookup of %s failed with error %d - %s",
+                                                    hostname, error, errno_str));
+        connection.state = UA_CONNECTIONSTATE_CLOSED;
+        return connection;
+    }
+
+    /* Return connection with state UA_CONNECTIONSTATE_OPENING */
+    return connection;
+}
+
+
 UA_Connection
 UA_ClientConnectionTCP_init(UA_ConnectionConfig config, const UA_String endpointUrl,
                             UA_UInt32 timeout, const UA_Logger *logger) {
