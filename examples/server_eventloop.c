@@ -67,12 +67,6 @@ static void UA_Connection_close(UA_Connection *connection) {
 //
 // }
 
-typedef struct {
-    bool dummy;
-} Dummy ;
-
-Dummy global_dummy = {false};
-
 static void
 connectionCallback(UA_ConnectionManager *cm, uintptr_t connectionId,
                    void **connectionContext, UA_StatusCode stat,
@@ -81,25 +75,16 @@ connectionCallback(UA_ConnectionManager *cm, uintptr_t connectionId,
     UA_LOG_DEBUG(UA_EventLoop_getLogger(cm->eventSource.eventLoop), UA_LOGCATEGORY_SERVER,
                  "connection callback for id: %lu", connectionId);
 
-    // if (stat != UA_STATUSCODE_GOOD) {
-    //     UA_LOG_DEBUG(UA_EventLoop_getLogger(cm->eventSource.eventLoop), UA_LOGCATEGORY_SERVER, "error");
-    // }
-
-    // UA_CHECK_STATUS_ERROR(
-    //     stat,
-    //     return,
-    //     UA_EventLoop_getLogger(cm->eventSource.eventLoop),
-    //     UA_LOGCATEGORY_SERVER,
-    //     "error"
-    //     )
-
-// #ifdef UA_DEBUG_DUMP_PKGS
-//     UA_dump_hex_pkg(msg.data, msg.length);
-// #endi
-    //
     UA_BasicConnectionContext *ctx = (UA_BasicConnectionContext *) *connectionContext;
 
-    // UA_StatusCode rv = UA_STATUSCODE_GOOD;
+    if (stat != UA_STATUSCODE_GOOD) {
+        UA_LOG_INFO(UA_EventLoop_getLogger(cm->eventSource.eventLoop), UA_LOGCATEGORY_SERVER, "closing connection");
+
+        if (!ctx->isInitial) {
+            free(*connectionContext);
+        }
+        return;
+    }
 
     if (ctx->isInitial) {
         UA_ConnectionContext *newCtx = (UA_ConnectionContext*) calloc(1, sizeof(UA_ConnectionContext));
@@ -122,10 +107,6 @@ connectionCallback(UA_ConnectionManager *cm, uintptr_t connectionId,
     }
 
     UA_ConnectionContext *conCtx = (UA_ConnectionContext *) *connectionContext;
-    // if (ctx->connectionId != connectionId) {
-    //     ctx->connectionId = connectionId;
-    //     ctx->connection.connectionId = connectionId;
-    // }
 
     if (msg.length > 0) {
         UA_Server_processBinaryMessage(ctx->server, &conCtx->connection, &msg);
@@ -157,9 +138,6 @@ UA_Server_setupEventLoop(UA_Server *server) {
 int main(int argc, char** argv) {
     signal(SIGINT, stopHandler);
     signal(SIGTERM, stopHandler);
-
-    UA_ServerConfig *conf = (UA_ServerConfig*) UA_calloc(1, sizeof(UA_ServerConfig));
-    UA_ServerConfig_setDefault(conf);
 
     UA_Server *server = UA_Server_new();
     UA_ServerConfig_setDefault(UA_Server_getConfig(server));
