@@ -1046,6 +1046,7 @@ UA_PubSubDataSetWriter_generateKeyFrameMessage(UA_Server *server,
 
 #ifdef UA_ENABLE_PUBSUB_DELTAFRAMES
         /* Update lastValue store */
+
         UA_DataValue_clear(&dataSetWriter->lastSamples[counter].value);
         UA_DataValue_copy(dfv, &dataSetWriter->lastSamples[counter].value);
 #endif
@@ -1291,7 +1292,8 @@ UA_DataSetWriter_generateDataSetMessage(UA_Server *server,
     if(dataSetWriter->connectedDataSetVersion.majorVersion !=
        currentDataSet->dataSetMetaData.configurationVersion.majorVersion ||
        dataSetWriter->connectedDataSetVersion.minorVersion !=
-       currentDataSet->dataSetMetaData.configurationVersion.minorVersion) {
+       currentDataSet->dataSetMetaData.configurationVersion.minorVersion ||
+           dataSetWriter->lastSamplesCount == 0) {
         /* Remove old samples */
         for(size_t i = 0; i < dataSetWriter->lastSamplesCount; i++)
             UA_DataValue_clear(&dataSetWriter->lastSamples[i].value);
