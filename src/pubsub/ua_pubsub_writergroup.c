@@ -950,9 +950,10 @@ static UA_StatusCode
 sendBufferedNetworkMessage(UA_Server *server, UA_PubSubConnection *connection,
                            UA_NetworkMessageOffsetBuffer *buffer,
                            UA_ExtensionObject *transportSettings) {
-    if(UA_NetworkMessage_updateBufferedMessage(buffer) != UA_STATUSCODE_GOOD)
+    if(UA_NetworkMessage_updateBufferedMessage(buffer) != UA_STATUSCODE_GOOD) {
         UA_LOG_DEBUG(&server->config.logger, UA_LOGCATEGORY_SERVER,
                      "PubSub sending. Unknown field type.");
+    }
     return connection->channel->send(connection->channel,
                                      transportSettings, &buffer->buffer);
 }

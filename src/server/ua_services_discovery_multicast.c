@@ -249,10 +249,11 @@ UA_Server_updateMdnsForDiscoveryUrl(UA_Server *server, const UA_String *serverNa
         UA_StatusCode removeRetval =
                 UA_Discovery_removeRecord(server, serverName, &hostname,
                                           port, updateTxt);
-        if(removeRetval != UA_STATUSCODE_GOOD)
+        if(removeRetval != UA_STATUSCODE_GOOD) {
             UA_LOG_WARNING(&server->config.logger, UA_LOGCATEGORY_SERVER,
                            "Could not remove mDNS record for hostname %.*s.",
                            (int)serverName->length, serverName->data);
+        }
         return;
     }
 
@@ -268,10 +269,11 @@ UA_Server_updateMdnsForDiscoveryUrl(UA_Server *server, const UA_String *serverNa
                                port, &path, UA_DISCOVERY_TCP, updateTxt,
                                capabilities, capabilitiesSize,
                                false);
-    if(addRetval != UA_STATUSCODE_GOOD)
+    if(addRetval != UA_STATUSCODE_GOOD) {
         UA_LOG_WARNING(&server->config.logger, UA_LOGCATEGORY_SERVER,
                        "Could not add mDNS record for hostname %.*s.",
                        (int)serverName->length, serverName->data);
+    }
 }
 
 void

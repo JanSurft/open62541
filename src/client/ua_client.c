@@ -159,14 +159,17 @@ notifyClientState(UA_Client *client) {
     const char *sessionStateText = sessionStateTexts[client->sessionState];
     const char *connectStatusText = UA_StatusCode_name(client->connectStatus);
 
-    if(info)
-        UA_LOG_INFO(&client->config.logger, UA_LOGCATEGORY_CLIENT,
-                    "Client Status: ChannelState: %s, SessionState: %s, ConnectStatus: %s",
-                    channelStateText, sessionStateText, connectStatusText);
-    else
-        UA_LOG_DEBUG(&client->config.logger, UA_LOGCATEGORY_CLIENT,
-                     "Client Status: ChannelState: %s, SessionState: %s, ConnectStatus: %s",
-                     channelStateText, sessionStateText, connectStatusText);
+    if(info) {
+        UA_LOG_INFO(
+            &client->config.logger, UA_LOGCATEGORY_CLIENT,
+            "Client Status: ChannelState: %s, SessionState: %s, ConnectStatus: %s",
+            channelStateText, sessionStateText, connectStatusText);
+    } else {
+        UA_LOG_DEBUG(
+            &client->config.logger, UA_LOGCATEGORY_CLIENT,
+            "Client Status: ChannelState: %s, SessionState: %s, ConnectStatus: %s",
+            channelStateText, sessionStateText, connectStatusText);
+    }
 #endif
 
     client->oldConnectStatus = client->connectStatus;

@@ -131,9 +131,10 @@ UA_PubSubConnection_regist(UA_Server *server, UA_NodeId *connectionIdentifier) {
     }
 
     UA_StatusCode retval = connection->channel->regist(connection->channel, NULL, NULL);
-    if(retval != UA_STATUSCODE_GOOD)
+    if(retval != UA_STATUSCODE_GOOD) {
         UA_LOG_WARNING(&server->config.logger, UA_LOGCATEGORY_SERVER,
                        "register channel failed: 0x%" PRIx32 "!", retval);
+    }
 
     connection->isRegistered = UA_TRUE;
     return retval;

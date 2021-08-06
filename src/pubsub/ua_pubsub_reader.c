@@ -1023,10 +1023,11 @@ UA_DataSetReader_process(UA_Server *server, UA_ReaderGroup *rg,
         writeVal.nodeId = tv->targetVariable.targetNodeId;
         writeVal.value = msg->data.keyFrameData.dataSetFields[i];
         res = UA_Server_write(server, &writeVal);
-        if(res != UA_STATUSCODE_GOOD)
+        if(res != UA_STATUSCODE_GOOD) {
             UA_LOG_INFO(&server->config.logger, UA_LOGCATEGORY_SERVER,
-                        "Error writing KeyFrame field %u: %s",
-                        (unsigned)i, UA_StatusCode_name(res));
+                        "Error writing KeyFrame field %u: %s", (unsigned)i,
+                        UA_StatusCode_name(res));
+        }
     }
 
 #ifdef UA_ENABLE_PUBSUB_MONITORING

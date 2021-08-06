@@ -475,11 +475,12 @@ setHistoricalEvent(UA_Server *server, const UA_NodeId *origin,
                            &historicalEventFilterValue);
     if(retval != UA_STATUSCODE_GOOD) {
         /* Do not vex users with no match errors */
-        if(retval != UA_STATUSCODE_BADNOMATCH)
+        if(retval != UA_STATUSCODE_BADNOMATCH) {
             UA_LOG_WARNING(&server->config.logger, UA_LOGCATEGORY_SERVER,
                            "Cannot read the HistoricalEventFilter property of a "
                            "listening node. StatusCode %s",
                            UA_StatusCode_name(retval));
+        }
         return;
     }
 

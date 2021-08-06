@@ -63,8 +63,11 @@ discovery_createMulticastSocket(UA_Server* server) {
         inet_pton(AF_INET, interfaceName, &ina);
         UA_free(interfaceName);
         /* Set interface for outbound multicast */
-        if (setsockopt(s, IPPROTO_IP, IP_MULTICAST_IF, (char*)&ina, sizeof(ina)) < 0)
-            UA_LOG_ERROR(&server->config.logger, UA_LOGCATEGORY_SERVER, "Multicast DNS: failed setting IP_MULTICAST_IF to %s: %s", inet_ntoa(ina), strerror(errno));
+        if (setsockopt(s, IPPROTO_IP, IP_MULTICAST_IF, (char*)&ina, sizeof(ina)) < 0) {
+            UA_LOG_ERROR(&server->config.logger, UA_LOGCATEGORY_SERVER,
+                         "Multicast DNS: failed setting IP_MULTICAST_IF to %s",
+                         inet_ntoa(ina));
+        }
     }
 
     /* Check outbound multicast interface parameters */

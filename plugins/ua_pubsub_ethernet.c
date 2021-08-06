@@ -689,10 +689,10 @@ UA_PubSubChannelEthernet_open(const UA_PubSubConnectionConfig *connectionConfig)
     }
 #endif
 
-    if(sockOptions.enableXdpSocket)
+    if(sockOptions.enableXdpSocket) {
         UA_LOG_WARNING(UA_Log_Stdout, UA_LOGCATEGORY_SERVER,
                        "XDP dependent libraries not found. Use above 5.4 kernel and install libbpf for XDP support. Using AF_PACKET socket");
-
+    }
     /* Open a packet socket */
     int sockFd = UA_socket(PF_PACKET, SOCK_RAW, 0);
     if(sockFd < 0) {
