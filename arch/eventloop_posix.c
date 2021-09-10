@@ -62,6 +62,9 @@ struct UA_EventLoop {
     size_t fdsSize;
     UA_RegisteredFD *fds;
 
+    /* Flag determining whether the eventloop is currently within the "run" method */
+    UA_Boolean executing;
+
 #if UA_MULTITHREADING >= 100
     UA_Lock elMutex;
 #endif
@@ -472,10 +475,16 @@ UA_StatusCode
 UA_EventLoop_run(UA_EventLoop *el, UA_UInt32 timeout) {
     UA_LOCK(&el->elMutex);
 
+    UA_CHECK_ERROR(!el->executing, return UA_STATUSCODE_BADINTERNALERROR, el->logger,
+                   UA_LOGCATEGORY_EVENTLOOP, "Cannot run eventloop from the run method itself");
+
+    el->executing = true;
+
     if(el->state == UA_EVENTLOOPSTATE_FRESH ||
        el->state == UA_EVENTLOOPSTATE_STOPPED) {
         UA_LOG_WARNING(el->logger, UA_LOGCATEGORY_EVENTLOOP,
                        "Cannot iterate a stopped EventLoop");
+        el->executing = false;
         UA_UNLOCK(&el->elMutex);
         return UA_STATUSCODE_BADINTERNALERROR;
     }
@@ -503,6 +512,7 @@ UA_EventLoop_run(UA_EventLoop *el, UA_UInt32 timeout) {
            UA_LOG_WARNING(UA_EventLoop_getLogger(el),
                           UA_LOGCATEGORY_EVENTLOOP,
                           "Error during select: %s", errno_str));
+        el->executing = false;
         UA_UNLOCK(&el->elMutex);
         return UA_STATUSCODE_GOOD;
     }
@@ -548,13 +558,16 @@ UA_EventLoop_run(UA_EventLoop *el, UA_UInt32 timeout) {
     processDelayed(el);
 
     /* Check if the last EventSource was successfully stopped */
-    if(el->state == UA_EVENTLOOPSTATE_STOPPING)
+    if(el->state == UA_EVENTLOOPSTATE_STOPPING) {
         checkClosed(el);
+    }
 
-    UA_UNLOCK(&el->elMutex);
+    el->executing = false;
     if (selectStatus == 0) {
+        UA_UNLOCK(&el->elMutex);
         return UA_STATUSCODE_GOODNONCRITICALTIMEOUT;
     }
+    UA_UNLOCK(&el->elMutex);
     return UA_STATUSCODE_GOOD;
 }
 
