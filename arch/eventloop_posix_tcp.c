@@ -543,6 +543,12 @@ TCP_eventSourceStop(UA_ConnectionManager *cm) {
     UA_EventLoop_iterateFD(cm->eventSource.eventLoop, &cm->eventSource,
                            TCP_shutdownCallback);
     cm->eventSource.state = UA_EVENTSOURCESTATE_STOPPING;
+
+    TCPConnectionManager *tcm = (TCPConnectionManager*)cm;
+
+    /* Closed? */
+    if(tcm->fdCount == 0 && cm->eventSource.state == UA_EVENTSOURCESTATE_STOPPING)
+        cm->eventSource.state = UA_EVENTSOURCESTATE_STOPPED;
 }
 
 static UA_StatusCode
