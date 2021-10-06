@@ -11,6 +11,8 @@
 #include <open62541/transport_generated_handling.h>
 #include <open62541/types_generated_encoding_binary.h>
 
+#include "ua_util_internal.h"
+
 #include "ua_client_internal.h"
 
 #define UA_MINMESSAGESIZE 8192
@@ -867,6 +869,16 @@ createSessionAsync(UA_Client *client) {
 
 static UA_StatusCode
 initConnect(UA_Client *client);
+static UA_StatusCode
+UA_Client_make_connection(UA_Client *client);
+
+UA_StatusCode
+initConnection(uintptr_t connectionId, void **connectionContext,
+                          UA_BasicClientConnectionContext *ctx);
+UA_StatusCode
+connectionCallbackSend(UA_ClientConnectionContext *ctx);
+UA_StatusCode
+connectionCallbackReceive(UA_ClientConnectionContext *ctx, UA_ByteString msg);
 
 UA_StatusCode
 connectIterate(UA_Client *client, UA_UInt32 timeout) {
@@ -890,95 +902,9 @@ connectIterate(UA_Client *client, UA_UInt32 timeout) {
     /* The connection is closed. Reset the SecureChannel and open a new TCP
      * connection */
     if(client->connection.state == UA_CONNECTIONSTATE_CLOSED)
-        return initConnect(client);
+        return UA_Client_make_connection(client);
 
-    /* Poll the connection status */
-    if(client->connection.state == UA_CONNECTIONSTATE_OPENING) {
-        client->connectStatus =
-            client->config.pollConnectionFunc(&client->connection, timeout,
-                                              &client->config.logger);
-        return client->connectStatus;
-    }
-
-    /* Attach the connection to the SecureChannel */
-    if(!client->channel.connection)
-        UA_Connection_attachSecureChannel(&client->connection, &client->channel);
-
-    /* Set the SecurityPolicy */
-    if(!client->channel.securityPolicy) {
-        client->channel.securityMode = client->config.endpoint.securityMode;
-        if(client->channel.securityMode == UA_MESSAGESECURITYMODE_INVALID)
-            client->channel.securityMode = UA_MESSAGESECURITYMODE_NONE;
-
-        UA_SecurityPolicy *sp = NULL;
-        if(client->config.endpoint.securityPolicyUri.length == 0) {
-            sp = getSecurityPolicy(client,
-                                   UA_STRING("http://opcfoundation.org/UA/SecurityPolicy#None"));
-        } else {
-            sp = getSecurityPolicy(client, client->config.endpoint.securityPolicyUri);
-        }
-        if(!sp) {
-            client->connectStatus = UA_STATUSCODE_BADINTERNALERROR;
-            return client->connectStatus;
-        }
-
-        client->connectStatus =
-            UA_SecureChannel_setSecurityPolicy(&client->channel, sp,
-                                               &client->config.endpoint.serverCertificate);
-        if(client->connectStatus != UA_STATUSCODE_GOOD)
-            return client->connectStatus;
-    }
-
-    /* Open the SecureChannel */
-    switch(client->channel.state) {
-    case UA_SECURECHANNELSTATE_FRESH:
-        client->connectStatus = sendHELMessage(client);
-        if(client->connectStatus == UA_STATUSCODE_GOOD) {
-            client->channel.state = UA_SECURECHANNELSTATE_HEL_SENT;
-        } else {
-            client->connection.close(&client->connection);
-            client->connection.free(&client->connection);
-        }
-        return client->connectStatus;
-    case UA_SECURECHANNELSTATE_ACK_RECEIVED:
-        client->connectStatus = sendOPNAsync(client, false);
-        return client->connectStatus;
-    case UA_SECURECHANNELSTATE_HEL_SENT:
-    case UA_SECURECHANNELSTATE_OPN_SENT:
-        client->connectStatus = receiveResponseAsync(client, timeout);
-        return client->connectStatus;
-    default:
-        break;
-    }
-
-    /* Have a SecureChannel but no session */
-    if(client->noSession)
-        return client->connectStatus;
-
-    /* Create and Activate the Session */
-    switch(client->sessionState) {
-    case UA_SESSIONSTATE_CLOSED:
-        if(!endpointUnconfigured(client)) {
-            client->connectStatus = createSessionAsync(client);
-            return client->connectStatus;
-        }
-        if(!client->endpointsHandshake) {
-            client->connectStatus = requestGetEndpoints(client);
-            return client->connectStatus;
-        }
-        receiveResponseAsync(client, timeout);
-        return client->connectStatus;
-    case UA_SESSIONSTATE_CREATE_REQUESTED:
-    case UA_SESSIONSTATE_ACTIVATE_REQUESTED:
-        receiveResponseAsync(client, timeout);
-        return client->connectStatus;
-    case UA_SESSIONSTATE_CREATED:
-        client->connectStatus = activateSessionAsync(client);
-        return client->connectStatus;
-    default:
-        break;
-    }
-
+    UA_EventLoop_run(client->config.eventLoop, timeout);
     return client->connectStatus;
 }
 
@@ -1038,21 +964,21 @@ initConnect(UA_Client *client) {
     client->channel.certificateVerification = &client->config.certificateVerification;
     client->channel.processOPNHeader = client_configure_securechannel;
 
-    if(client->connection.free)
-        client->connection.free(&client->connection);
+    // if(client->connection.free)
+    //     client->connection.free(&client->connection);
 
     /* Initialize the TCP connection */
-    client->connection =
-        client->config.initConnectionFunc(client->config.localConnectionConfig,
-                                          client->endpointUrl, client->config.timeout,
-                                          &client->config.logger);
-    if(client->connection.state != UA_CONNECTIONSTATE_OPENING) {
-        UA_LOG_WARNING(&client->config.logger, UA_LOGCATEGORY_CLIENT,
-                       "Could not open a TCP connection to %.*s",
-                       (int)client->endpointUrl.length, client->endpointUrl.data);
-        client->connectStatus = UA_STATUSCODE_BADCONNECTIONCLOSED;
-        closeSecureChannel(client);
-    }
+    // client->connection =
+    //     client->config.initConnectionFunc(client->config.localConnectionConfig,
+    //                                       client->endpointUrl, client->config.timeout,
+    //                                       &client->config.logger);
+    // if(client->connection.state != UA_CONNECTIONSTATE_OPENING) {
+    //     UA_LOG_WARNING(&client->config.logger, UA_LOGCATEGORY_CLIENT,
+    //                    "Could not open a TCP connection to %.*s",
+    //                    (int)client->endpointUrl.length, client->endpointUrl.data);
+    //     client->connectStatus = UA_STATUSCODE_BADCONNECTIONCLOSED;
+    //     closeSecureChannel(client);
+    // }
 
     return client->connectStatus;
 }
@@ -1084,27 +1010,70 @@ UA_Client_connectSecureChannelAsync(UA_Client *client, const char *endpointUrl) 
 }
 
 static UA_StatusCode
-connectSync(UA_Client *client) {
+UA_Client_make_connection(UA_Client *client) {
+
+    if (client->connection.handle == NULL) {
+        client->connection = client->config.initConnectionFunc(
+            client->config.localConnectionConfig, client->endpointUrl,
+            client->config.timeout, &client->config.logger);
+    }
+    UA_ClientConfig *cc = UA_Client_getConfig(client);
+
+    if (cc->cm == NULL) {
+        UA_StatusCode rv = UA_Client_setupEventLoop(client);
+        UA_CHECK_STATUS(rv, return rv);
+    }
+
+    // if (UA_EventLoop_getState(cc->eventLoop) == UA_EVENTLOOPSTATE_STOPPED) {
+    //     UA_StatusCode rv = UA_EventLoop_start(cc->eventLoop);
+    //     UA_CHECK_STATUS(rv, return rv);
+    // }
+
+    UA_StatusCode rv = initConnect(client);
+    UA_CHECK_STATUS(rv, return rv);
+    /* TODO: check rv */
+
+    // if (client->connection.handle != NULL) {
+    //     return UA_STATUSCODE_GOOD;
+    // }
+
+    void *ctx = client->config.cm->initialConnectionContext;
+
+    rv = client->config.cm->openConnection(client->config.cm, client->endpointUrl, ctx);
+    UA_CHECK_STATUS_ERROR(rv, return UA_STATUSCODE_BADCONNECTIONREJECTED,
+                          &client->config.logger, UA_LOGCATEGORY_CLIENT, "Error on opening connection");
+
+    client->connection.handle = ctx;
+    client->connection.state = UA_CONNECTIONSTATE_ESTABLISHED;
+
+    return rv;
+}
+
+static UA_Boolean
+isConnected(UA_Client *client) {
+    return (client->sessionState == UA_SESSIONSTATE_ACTIVATED) ||
+    (client->noSession && client->channel.state == UA_SECURECHANNELSTATE_OPEN);
+}
+
+static UA_StatusCode
+connectSyncEventLoop(UA_Client *client) {
     UA_DateTime now = UA_DateTime_nowMonotonic();
     UA_DateTime maxDate = now + ((UA_DateTime)client->config.timeout * UA_DATETIME_MSEC);
 
-    UA_StatusCode retval = initConnect(client);
-    if(retval != UA_STATUSCODE_GOOD)
-        return retval;
+    UA_StatusCode rv = UA_Client_make_connection(client);
+    UA_CHECK_STATUS(rv, return rv);
 
-    while(retval == UA_STATUSCODE_GOOD) {
-        if(client->sessionState == UA_SESSIONSTATE_ACTIVATED)
-            break;
-        if(client->noSession && client->channel.state == UA_SECURECHANNELSTATE_OPEN)
-            break;
+    while(!isConnected(client)) {
+
         now = UA_DateTime_nowMonotonic();
         if(maxDate < now)
             return UA_STATUSCODE_BADTIMEOUT;
-        retval = UA_Client_run_iterate(client,
+        rv = UA_Client_run_iterate(client,
                                        (UA_UInt32)((maxDate - now) / UA_DATETIME_MSEC));
+        UA_CHECK_STATUS_ERROR(rv, return rv, &client->config.logger, UA_LOGCATEGORY_CLIENT,
+                              "connecting client failed");
     }
-
-    return retval;
+    return rv;
 }
 
 UA_StatusCode
@@ -1117,7 +1086,7 @@ UA_Client_connect(UA_Client *client, const char *endpointUrl) {
     client->noSession = false;
 
     /* Connect Synchronous */
-    return connectSync(client);
+    return connectSyncEventLoop(client);
 }
 
 UA_StatusCode
@@ -1130,7 +1099,7 @@ UA_Client_connectSecureChannel(UA_Client *client, const char *endpointUrl) {
     client->noSession = true;
 
     /* Connect Synchronous */
-    return connectSync(client);
+    return connectSyncEventLoop(client);
 }
 
 /************************/
@@ -1140,7 +1109,7 @@ UA_Client_connectSecureChannel(UA_Client *client, const char *endpointUrl) {
 void
 closeSecureChannel(UA_Client *client) {
     /* Send CLO if the SecureChannel is open */
-    if(client->channel.state == UA_SECURECHANNELSTATE_OPEN) {
+    if(client->channel.state == UA_SECURECHANNELSTATE_OPEN && client->connectStatus != UA_STATUSCODE_BADCONNECTIONCLOSED) {
         UA_CloseSecureChannelRequest request;
         UA_CloseSecureChannelRequest_init(&request);
         request.requestHeader.requestHandle = ++client->requestHandle;
@@ -1155,8 +1124,10 @@ closeSecureChannel(UA_Client *client) {
     /* Clean up */
     client->channel.renewState = UA_SECURECHANNELRENEWSTATE_NORMAL;
     UA_SecureChannel_close(&client->channel);
-    if(client->connection.free)
-        client->connection.free(&client->connection);
+
+    /* TODO: why do I free the whole connection when just closing the secure channel ? */
+    // if(client->connection.free)
+    //     client->connection.free(&client->connection);
 
     /* Set the Session to "Created" if it was "Activated" */
     if(client->sessionState > UA_SESSIONSTATE_CREATED)
@@ -1247,3 +1218,293 @@ UA_Client_disconnect(UA_Client *client) {
     return UA_STATUSCODE_GOOD;
 }
 
+static UA_StatusCode UA_Connection_getSendBuffer(UA_Connection *connection, size_t length,
+                                                 UA_ByteString *buf) {
+    UA_ClientConnectionContext *ctx = (UA_ClientConnectionContext *) connection->handle;
+    UA_ConnectionManager *cm = ((UA_BasicClientConnectionContext *)ctx)->cm;
+    return cm->allocNetworkBuffer(cm, ctx->connectionId, buf, length);
+}
+
+static UA_StatusCode UA_Connection_send(UA_Connection *connection, UA_ByteString *buf) {
+    UA_ClientConnectionContext *ctx = (UA_ClientConnectionContext *) connection->handle;
+    UA_ConnectionManager *cm = ((UA_BasicClientConnectionContext *)ctx)->cm;
+    return cm->sendWithConnection(cm, ctx->connectionId, buf);
+}
+
+static
+void UA_Connection_releaseBuffer (UA_Connection *connection, UA_ByteString *buf) {
+    UA_ClientConnectionContext *ctx = (UA_ClientConnectionContext *) connection->handle;
+    UA_ConnectionManager *cm = ((UA_BasicClientConnectionContext *)ctx)->cm;
+    cm->freeNetworkBuffer(cm, ctx->connectionId, buf);
+}
+
+static void UA_Connection_close(UA_Connection *connection) {
+    UA_ClientConnectionContext *ctx = (UA_ClientConnectionContext *) connection->handle;
+    UA_ConnectionManager *cm = ((UA_BasicClientConnectionContext *)ctx)->cm;
+    cm->closeConnection(cm, ctx->connectionId);
+    connection->state = UA_CONNECTIONSTATE_CLOSED;
+    UA_Client_shutdownCallback(cm, ctx->connectionId, ctx);
+}
+
+static UA_StatusCode UA_Connection_recv(UA_Connection *connection, UA_ByteString *response,
+                               UA_UInt32 timeout) {
+    UA_ClientConnectionContext *ctx = (UA_ClientConnectionContext *) connection->handle;
+    // UA_ConnectionManager *cm = ((UA_BasicClientConnectionContext *)ctx)->cm;
+    UA_free(ctx->currentMessage.data);
+    ctx->currentMessage.data = NULL;
+    ctx->currentMessage.length = 0;
+
+    ctx->receiveSync = true;
+
+    UA_Client *client = ctx->base.client;
+    UA_EventLoop *el = client->config.eventLoop;
+
+    UA_StatusCode rv = UA_EventLoop_run(el, timeout);
+    UA_CHECK_STATUS(rv, return rv);
+
+    ctx->receiveSync = false;
+
+    response->length = ctx->currentMessage.length;
+    response->data = ctx->currentMessage.data;
+
+    return client->connectStatus;
+}
+
+static
+UA_StatusCode
+sessionAndChannelIteration(UA_ByteString *msg, UA_Client *client,
+                           UA_ClientConnectionContext *conCtx) {
+
+    UA_StatusCode rv = UA_STATUSCODE_GOOD;
+    if((*msg).data != NULL) {
+        rv = connectionCallbackReceive(conCtx, (*msg));
+        UA_CHECK_STATUS_ERROR(rv, return rv, &client->config.logger,
+                              UA_LOGCATEGORY_CLIENT, "Receiving msg failed");
+    }  // else {
+    rv = connectionCallbackSend(conCtx);
+    UA_CHECK_STATUS_ERROR(rv, return rv, &client->config.logger,
+                          UA_LOGCATEGORY_CLIENT, "Sending msg failed");
+    // }
+    return rv;
+}
+
+void
+UA_Client_shutdownCallback(UA_ConnectionManager *cm, uintptr_t connectionId,
+                 void *connectionContext) {
+    UA_BasicClientConnectionContext *basic = (UA_BasicClientConnectionContext*) connectionContext;
+    if (basic->isInitial) {
+        return;
+    } else {
+        UA_ClientConnectionContext *ctx = (UA_ClientConnectionContext*) basic;
+        if (basic->client->connection.handle != connectionContext) {
+            UA_free(ctx->currentMessage.data);
+            UA_free(ctx);
+        }
+    }
+}
+
+void
+UA_Client_connectionCallback(UA_ConnectionManager *cm, uintptr_t connectionId,
+                   void **connectionContext, UA_StatusCode stat,
+                   UA_ByteString msg) {
+
+    const UA_Logger *logger = UA_EventLoop_getLogger(cm->eventSource.eventLoop);
+    /* TODO: is something needed here from poll? */
+    UA_LOG_DEBUG(logger, UA_LOGCATEGORY_CLIENT,
+                 "connection callback for id: %lu", connectionId);
+
+    if (*connectionContext == NULL) {
+        UA_LOG_WARNING(logger, UA_LOGCATEGORY_CLIENT,
+                     "running callback with NULL context");
+        return;
+    }
+
+    UA_BasicClientConnectionContext *ctx = (UA_BasicClientConnectionContext *) *connectionContext;
+    if (stat == UA_STATUSCODE_BADCONNECTIONCLOSED) {
+        UA_CHECK_STATUS_INFO(stat, (void)0, logger, UA_LOGCATEGORY_CLIENT, "disconnection");
+        UA_LOG_INFO(UA_EventLoop_getLogger(cm->eventSource.eventLoop),
+                    UA_LOGCATEGORY_CLIENT, "closing connection");
+        UA_Client *client = ctx->client;
+        client->connectStatus = UA_STATUSCODE_BADCONNECTIONCLOSED;
+
+        UA_Client_shutdownCallback(cm, connectionId, *connectionContext);
+        return;
+    }
+
+    UA_Client *client = ctx->client;
+    if (ctx->isInitial) {
+        client->connectStatus = initConnection(connectionId, connectionContext, ctx);
+        UA_CHECK_STATUS_ERROR(client->connectStatus, return, UA_EventLoop_getLogger(cm->eventSource.eventLoop),
+                              UA_LOGCATEGORY_CLIENT, "Initializing connection failed");
+    }
+
+    UA_ClientConnectionContext *conCtx = (UA_ClientConnectionContext *) *connectionContext;
+    if((client->noSession && client->channel.state != UA_SECURECHANNELSTATE_OPEN) ||
+        client->sessionState < UA_SESSIONSTATE_ACTIVATED) {
+        client->connectStatus = sessionAndChannelIteration(&msg, client, conCtx);
+        notifyClientState(client);
+    } else {
+        if (msg.data) {
+            if(conCtx->receiveSync) {
+                conCtx->currentMessage.length = msg.length;
+                conCtx->currentMessage.data = (UA_Byte *) UA_realloc(
+                    conCtx->currentMessage.data, sizeof(UA_Byte) * msg.length);
+                memcpy(conCtx->currentMessage.data, msg.data, sizeof(UA_Byte) * msg.length);
+                return;
+            } else {
+                client->connectStatus = processResponse(client, &msg, NULL, NULL, NULL);
+            }
+        }
+    }
+}
+
+UA_StatusCode
+connectionCallbackReceive(UA_ClientConnectionContext *ctx, UA_ByteString msg) {
+
+    UA_Client *client = ctx->base.client;
+    UA_LOG_DEBUG(&client->config.logger, UA_LOGCATEGORY_CLIENT, "received msg");
+    switch(client->channel.state) {
+        case UA_SECURECHANNELSTATE_HEL_SENT:
+        case UA_SECURECHANNELSTATE_OPN_SENT:
+            /* TODO: integrate timeout in context */
+            client->connectStatus = processResponse(client, &msg, NULL, NULL, NULL);
+            return client->connectStatus;
+        default:
+            break;
+    }
+
+    /* Have a SecureChannel but no session */
+    if(client->noSession)
+        return client->connectStatus;
+
+    switch(client->sessionState) {
+        case UA_SESSIONSTATE_CLOSED:
+            processResponse(client, &msg, NULL, NULL, NULL);
+            return client->connectStatus;
+        case UA_SESSIONSTATE_CREATE_REQUESTED:
+        case UA_SESSIONSTATE_ACTIVATE_REQUESTED:
+            processResponse(client, &msg, NULL, NULL, NULL);
+            return client->connectStatus;
+        default:
+            break;
+    }
+
+
+    return UA_STATUSCODE_GOOD;
+}
+
+UA_StatusCode
+connectionCallbackSend(UA_ClientConnectionContext *ctx) {
+
+    UA_Client *client = ctx->base.client;
+    UA_StatusCode retval = UA_STATUSCODE_GOOD;
+    if((client->noSession && client->channel.state != UA_SECURECHANNELSTATE_OPEN) ||
+       client->sessionState < UA_SESSIONSTATE_ACTIVATED) {
+
+        /* Open the SecureChannel */
+        switch(client->channel.state) {
+            case UA_SECURECHANNELSTATE_FRESH:
+                client->connectStatus = sendHELMessage(client);
+                if(client->connectStatus == UA_STATUSCODE_GOOD) {
+                    client->channel.state = UA_SECURECHANNELSTATE_HEL_SENT;
+                } else {
+                    client->connection.close(&client->connection);
+                    client->connection.free(&client->connection);
+                }
+                return client->connectStatus;
+            case UA_SECURECHANNELSTATE_ACK_RECEIVED:
+                client->connectStatus = sendOPNAsync(client, false);
+                return client->connectStatus;
+            default:
+                break;
+        }
+
+        /* Have a SecureChannel but no session */
+        if(client->noSession)
+            return client->connectStatus;
+        /* Create and Activate the Session */
+        switch(client->sessionState) {
+            case UA_SESSIONSTATE_CLOSED:
+                if(!endpointUnconfigured(client)) {
+                    client->connectStatus = createSessionAsync(client);
+                    return client->connectStatus;
+                }
+                if(!client->endpointsHandshake) {
+                    client->connectStatus = requestGetEndpoints(client);
+                    return client->connectStatus;
+                }
+                return client->connectStatus;
+            case UA_SESSIONSTATE_CREATE_REQUESTED:
+            case UA_SESSIONSTATE_ACTIVATE_REQUESTED:
+                return client->connectStatus;
+            case UA_SESSIONSTATE_CREATED:
+                client->connectStatus = activateSessionAsync(client);
+                return client->connectStatus;
+            default:
+                break;
+        }
+
+        UA_CHECK_STATUS_ERROR(retval, return UA_STATUSCODE_BAD, &client->config.logger,
+                              UA_LOGCATEGORY_CLIENT, "Error connecting");
+    }
+
+    return UA_STATUSCODE_GOOD;
+}
+
+
+
+UA_StatusCode
+initConnection(uintptr_t connectionId, void **connectionContext,
+                          UA_BasicClientConnectionContext *ctx) {
+    UA_ClientConnectionContext *newCtx = (UA_ClientConnectionContext*) UA_calloc(1, sizeof(UA_ClientConnectionContext));
+    UA_CHECK_MEM(newCtx, return UA_STATUSCODE_BADOUTOFMEMORY);
+    UA_Client *client = ctx->client;
+    newCtx->base.isInitial = false;
+    newCtx->base.cm = ctx->cm;
+    newCtx->base.client = ctx->client;
+    newCtx->connectionId = connectionId;
+    newCtx->connection.close = UA_Connection_close;
+    newCtx->connection.free = ctx->client->connection.free;
+    newCtx->connection.getSendBuffer = UA_Connection_getSendBuffer;
+    newCtx->connection.recv = UA_Connection_recv; // ctx->client->connection.recv;
+    newCtx->connection.releaseRecvBuffer = UA_Connection_releaseBuffer;
+    newCtx->connection.releaseSendBuffer = UA_Connection_releaseBuffer;
+    newCtx->connection.send = UA_Connection_send;
+    newCtx->connection.state = UA_CONNECTIONSTATE_ESTABLISHED;
+    newCtx->connection.sockfd = (int) connectionId;
+
+    newCtx->connection.handle = newCtx;
+    newCtx->receiveSync = false;
+
+    newCtx->base.client->connection = newCtx->connection;
+
+    *connectionContext = newCtx;
+
+    /* Attach the connection to the SecureChannel */
+    if(!client->channel.connection) {
+        UA_Connection_attachSecureChannel(&client->connection, &client->channel);
+    }
+    /* Set the SecurityPolicy */
+    if(!client->channel.securityPolicy) {
+        client->channel.securityMode = client->config.endpoint.securityMode;
+        if(client->channel.securityMode == UA_MESSAGESECURITYMODE_INVALID)
+            client->channel.securityMode = UA_MESSAGESECURITYMODE_NONE;
+
+        UA_SecurityPolicy *sp = NULL;
+        if(client->config.endpoint.securityPolicyUri.length == 0) {
+            sp = getSecurityPolicy(client,
+                                   UA_STRING("http://opcfoundation.org/UA/SecurityPolicy#None"));
+        } else {
+            sp = getSecurityPolicy(client, client->config.endpoint.securityPolicyUri);
+        }
+        UA_CHECK_MEM_ERROR(sp, return UA_STATUSCODE_BAD, &client->config.logger,
+                           UA_LOGCATEGORY_CLIENT, "Error getting security policy");
+
+        client->connectStatus =
+            UA_SecureChannel_setSecurityPolicy(&client->channel, sp,
+                                               &client->config.endpoint.serverCertificate);
+        UA_CHECK_STATUS_ERROR(client->connectStatus, return UA_STATUSCODE_BAD, &client->config.logger,
+                              UA_LOGCATEGORY_CLIENT, "Error setting security policy");
+    }
+    return UA_STATUSCODE_GOOD;
+}

@@ -79,6 +79,11 @@ TCP_close(UA_ConnectionManager *cm, UA_FD fd) {
 static void
 TCP_connectionSocketCallback(UA_ConnectionManager *cm, UA_FD fd,
                              void **fdcontext, short event) {
+
+    UA_LOG_DEBUG(UA_EventLoop_getLogger(cm->eventSource.eventLoop),
+                 UA_LOGCATEGORY_NETWORK,
+                 "connection socket callback, fd: %d", (UA_FD) fd);
+
     /* Write-Event, a new connection has opened.  */
     UA_StatusCode res = UA_STATUSCODE_GOOD;
     if(event & UA_POSIX_EVENT_WRITE) {
@@ -135,14 +140,26 @@ TCP_connectionSocketCallback(UA_ConnectionManager *cm, UA_FD fd,
 static void
 TCP_listenSocketCallback(UA_ConnectionManager *cm, UA_FD fd,
                          void **fdcontext, short event) {
+    UA_LOG_DEBUG(UA_EventLoop_getLogger(cm->eventSource.eventLoop),
+                 UA_LOGCATEGORY_NETWORK,
+                 "attempting to listen on socketd, fd: %d", (UA_FD) fd);
+
     /* Try to accept a new connection */
     struct sockaddr_storage remote;
     socklen_t remote_size = sizeof(remote);
     UA_FD newsockfd = UA_accept(fd, (struct sockaddr*)&remote, &remote_size);
     if(newsockfd == UA_INVALID_FD) {
         /* Close the listen socket */
-        if(UA_ERRNO != UA_INTERRUPTED)
+        if(UA_ERRNO != UA_INTERRUPTED) {
+            cm->connectionCallback(cm, (uintptr_t)fd, fdcontext,
+                                   UA_STATUSCODE_BADCONNECTIONCLOSED,
+                                   UA_BYTESTRING_NULL);
             TCP_close(cm, fd);
+        } else {
+            UA_LOG_WARNING(UA_EventLoop_getLogger(cm->eventSource.eventLoop),
+                         UA_LOGCATEGORY_NETWORK,
+                         "listen socket callback was interrupted by a signal");
+        }
         return;
     }
 
@@ -156,19 +173,19 @@ TCP_listenSocketCallback(UA_ConnectionManager *cm, UA_FD fd,
         return;
     }
 
+    void *ctx = cm->initialConnectionContext;
     /* The socket has opened. Signal it to the application. The callback can
      * switch out the context. So put it into a temp variable.  */
-    void *ctx = cm->initialConnectionContext;
-    cm->connectionCallback(cm, (uintptr_t)fd, &ctx, UA_STATUSCODE_GOOD,
+    cm->connectionCallback(cm, (uintptr_t)newsockfd, &ctx, UA_STATUSCODE_GOOD,
                            UA_BYTESTRING_NULL);
 
     /* Register in the EventLoop. Signal to the user if registering failed. */
     res = UA_EventLoop_registerFD(cm->eventSource.eventLoop, newsockfd,
                                   UA_POSIX_EVENT_READ,
-                                  (void (*)(struct UA_EventSource *, int, void *, short))
-                                  TCP_connectionSocketCallback, &cm->eventSource, ctx);
+                                  (UA_FDCallback) TCP_connectionSocketCallback,
+                                  &cm->eventSource, ctx);
     if(res != UA_STATUSCODE_GOOD) {
-        cm->connectionCallback(cm, (uintptr_t)fd, &ctx,
+        cm->connectionCallback(cm, (uintptr_t)newsockfd, &ctx,
                                UA_STATUSCODE_BADINTERNALERROR, UA_BYTESTRING_NULL);
         UA_close(newsockfd);
     }
@@ -256,8 +273,8 @@ TCP_registerListenSocket(UA_ConnectionManager *cm, struct addrinfo *ai) {
     UA_StatusCode res =
         UA_EventLoop_registerFD(cm->eventSource.eventLoop, listenSocket,
                                 UA_POSIX_EVENT_READ,
-                                (void (*)(struct UA_EventSource *, int, void *, short))
-                                TCP_listenSocketCallback, &cm->eventSource, NULL);
+                                (UA_FDCallback) TCP_listenSocketCallback,
+                                &cm->eventSource, NULL);
     if(res != UA_STATUSCODE_GOOD) {
         UA_LOG_WARNING(UA_EventLoop_getLogger(cm->eventSource.eventLoop),
                        UA_LOGCATEGORY_NETWORK,
@@ -316,6 +333,10 @@ TCP_registerListenSocketDomainName(UA_ConnectionManager *cm, const char *hostnam
 
 static UA_StatusCode
 TCP_shutdownConnection(UA_ConnectionManager *cm, uintptr_t connectionId) {
+
+    UA_LOG_DEBUG(UA_EventLoop_getLogger(cm->eventSource.eventLoop),
+                 UA_LOGCATEGORY_NETWORK,
+                 "attempting to shutdown with fd: %d", (UA_FD) connectionId);
     /* Shutdown, will be picked up by the next iteration of the event loop */
     if(shutdown((UA_FD)connectionId, SHUT_RDWR) != 0)
         return UA_STATUSCODE_BADINTERNALERROR;
@@ -333,11 +354,19 @@ TCP_sendWithConnection(UA_ConnectionManager *cm, uintptr_t connectionId,
     do {
         ssize_t n = 0;
         do {
+
+            UA_LOG_DEBUG(UA_EventLoop_getLogger(cm->eventSource.eventLoop),
+                         UA_LOGCATEGORY_NETWORK,
+                         "attempting to send with fd: %d", (UA_FD) connectionId);
             size_t bytes_to_send = buf->length - nWritten;
             n = UA_send((UA_FD)connectionId,
-                        (const char*)buf->data + nWritten,
+                        (const char*)(buf->data + nWritten),
                         bytes_to_send, flags);
             if(n < 0 && UA_ERRNO != UA_INTERRUPTED && UA_ERRNO != UA_AGAIN) {
+                UA_LOG_SOCKET_ERRNO_GAI_WRAP(
+                    UA_LOG_ERROR(UA_EventLoop_getLogger(cm->eventSource.eventLoop),
+                                   UA_LOGCATEGORY_NETWORK,
+                                   "send failed with error %s", errno_str));
                 TCP_shutdownConnection(cm, connectionId);
                 UA_ByteString_clear(buf);
                 return UA_STATUSCODE_BADCONNECTIONCLOSED;
@@ -354,35 +383,35 @@ TCP_sendWithConnection(UA_ConnectionManager *cm, uintptr_t connectionId,
 static UA_StatusCode
 TCP_openConnection(UA_ConnectionManager *cm, const UA_String connectString,
                    void *context) {
+
+    const UA_Logger *logger = UA_EventLoop_getLogger(cm->eventSource.eventLoop);
     UA_LOG_INFO(UA_EventLoop_getLogger(cm->eventSource.eventLoop),
                 UA_LOGCATEGORY_NETWORK, "Open a TCP connection to %.*s",
                 (int)connectString.length, connectString.data);
 
-    /* Disect the connectString */
-    char hostname[256];
+    UA_String hostnameString = UA_STRING_NULL;
+    UA_String pathString = UA_STRING_NULL;
+    UA_UInt16 port = 0;
+    char hostname[512];
+
+    UA_StatusCode res =
+        UA_parseEndpointUrl(&connectString, &hostnameString, &port, &pathString);
+    if(res != UA_STATUSCODE_GOOD || hostnameString.length > 511) {
+        UA_LOG_WARNING(logger, UA_LOGCATEGORY_NETWORK,
+                       "Server url is invalid: %.*s",
+                       (int)connectString.length, connectString.data);
+        return UA_STATUSCODE_BADCONNECTIONREJECTED;
+    }
+    memcpy(hostname, hostnameString.data, hostnameString.length);
+    hostname[hostnameString.length] = 0;
+
+    if(port == 0) {
+        port = 4840;
+        UA_LOG_INFO(logger, UA_LOGCATEGORY_NETWORK,
+                    "No port defined, using default port %" PRIu16, port);
+    }
     char portStr[16];
-    const char *colon = (const char*)
-        memchr(connectString.data, ':', connectString.length);
-    UA_StatusCode res = UA_STATUSCODE_GOOD;
-    if(colon) {
-        size_t hostnameLen = (uintptr_t)(colon - (const char*)connectString.data);
-        size_t portStrLen = connectString.length - hostnameLen - 1;
-        if(hostnameLen < 256 && portStrLen < 16) {
-            strncpy(hostname, (const char*)connectString.data, hostnameLen);
-            hostname[hostnameLen] = 0;
-            strncpy(portStr, colon+1, portStrLen);
-            portStr[portStrLen] = 0;
-        } else {
-            res = UA_STATUSCODE_BADINTERNALERROR;
-        }
-    } else {
-        res = UA_STATUSCODE_BADINTERNALERROR;
-    }
-    if(res != UA_STATUSCODE_GOOD) {
-        UA_LOG_WARNING(UA_EventLoop_getLogger(cm->eventSource.eventLoop),
-                       UA_LOGCATEGORY_NETWORK, "Invalid connection string");
-        return res;
-    }
+    UA_snprintf(portStr, 16, "%d", port);
 
     /* Create the socket description from the connectString
      * TODO: Make this non-blocking */
@@ -432,8 +461,8 @@ TCP_openConnection(UA_ConnectionManager *cm, const UA_String connectString,
 
     /* Register the fd to trigger when output is possible (the connection is open) */
     res = UA_EventLoop_registerFD(cm->eventSource.eventLoop, newSock, UA_POSIX_EVENT_WRITE,
-                                  (void (*)(struct UA_EventSource *, int, void *, short))
-                                  TCP_connectionSocketCallback, &cm->eventSource, context);
+                                  (UA_FDCallback) TCP_connectionSocketCallback,
+                                  &cm->eventSource, context);
     if(res != UA_STATUSCODE_GOOD)
         UA_close(newSock);
 
@@ -462,8 +491,11 @@ TCP_eventSourceStart(UA_ConnectionManager *cm) {
     const UA_Variant *portConfig =
         UA_ConfigParameter_getScalarParameter(cm->eventSource.parameters,
                            "listen-port", &UA_TYPES[UA_TYPES_UINT16]);
-    if(!portConfig)
+    if(!portConfig) {
+        /* Set the EventSource to the started state */
+        cm->eventSource.state = UA_EVENTSOURCESTATE_STARTED;
         return UA_STATUSCODE_GOOD;
+    }
 
     /* Prepare the port parameter as a string */
     UA_UInt16 port = *(UA_UInt16*)portConfig->data;
@@ -522,6 +554,12 @@ TCP_eventSourceStop(UA_ConnectionManager *cm) {
     UA_EventLoop_iterateFD(cm->eventSource.eventLoop, &cm->eventSource,
                            TCP_shutdownCallback);
     cm->eventSource.state = UA_EVENTSOURCESTATE_STOPPING;
+
+    TCPConnectionManager *tcm = (TCPConnectionManager*)cm;
+
+    /* Closed? */
+    if(tcm->fdCount == 0 && cm->eventSource.state == UA_EVENTSOURCESTATE_STOPPING)
+        cm->eventSource.state = UA_EVENTSOURCESTATE_STOPPED;
 }
 
 static UA_StatusCode

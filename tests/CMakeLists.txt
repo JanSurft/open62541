@@ -18,6 +18,11 @@ if(APPLE)
     add_definitions(-Wno-sign-conversion)
 endif()
 
+# IF(CMAKE_BUILD_TYPE MATCHES DEBUG)
+    add_definitions(-Wno-unused-function)
+    add_definitions(-Wno-unused-variable)
+# ENDIF(CMAKE_BUILD_TYPE MATCHES DEBUG)
+
 get_property(open62541_BUILD_INCLUDE_DIRS TARGET open62541 PROPERTY INTERFACE_INCLUDE_DIRECTORIES)
 include_directories(${open62541_BUILD_INCLUDE_DIRS})
 # ua_server_internal.h
@@ -232,10 +237,6 @@ add_test_valgrind(utils ${TESTS_BINARY_DIR}/check_utils)
 add_executable(check_securechannel check_securechannel.c $<TARGET_OBJECTS:open62541-object> $<TARGET_OBJECTS:open62541-testplugins>)
 target_link_libraries(check_securechannel ${LIBS})
 add_test_valgrind(securechannel ${TESTS_BINARY_DIR}/check_securechannel)
-
-add_executable(check_timer check_timer.c $<TARGET_OBJECTS:open62541-object> $<TARGET_OBJECTS:open62541-testplugins>)
-target_link_libraries(check_timer ${LIBS})
-add_test_valgrind(timer ${TESTS_BINARY_DIR}/check_timer)
 
 add_executable(check_eventloop check_eventloop.c $<TARGET_OBJECTS:open62541-object> $<TARGET_OBJECTS:open62541-testplugins>)
 target_link_libraries(check_eventloop ${LIBS})

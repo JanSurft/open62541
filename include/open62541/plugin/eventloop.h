@@ -10,7 +10,8 @@
 
 #include <open62541/types.h>
 #include <open62541/types_generated.h>
-#include <open62541/plugin/network.h>
+#include <open62541/util.h>
+#include <open62541/plugin/log.h>
 
 _UA_BEGIN_DECLS
 
@@ -84,7 +85,7 @@ UA_EventLoop_start(UA_EventLoop *el);
 UA_EXPORT void
 UA_EventLoop_stop(UA_EventLoop *el);
 
-/* Process events for at most "timout" ms or until an unrecoverable error
+/* Process events for at most "timeout" ms or until an unrecoverable error
  * occurs. If timeout==0, then only already received events are processed. */
 UA_EXPORT UA_StatusCode
 UA_EventLoop_run(UA_EventLoop *el, UA_UInt32 timeout);
@@ -105,6 +106,10 @@ UA_EventLoop_addCyclicCallback(UA_EventLoop *el, UA_Callback cb,
                                UA_UInt64 *callbackId);
 
 UA_EXPORT UA_StatusCode
+UA_EventLoop_addTimedCallback(UA_EventLoop *el, UA_Callback callback,
+                              void *application, void *data, UA_DateTime date,
+                              UA_UInt64 *callbackId);
+UA_EXPORT UA_StatusCode
 UA_EventLoop_modifyCyclicCallback(UA_EventLoop *el, UA_UInt64 callbackId,
                                   UA_Double interval_ms, UA_DateTime *baseTime,
                                   UA_TimerPolicy timerPolicy);
@@ -114,6 +119,9 @@ UA_EventLoop_removeCyclicCallback(UA_EventLoop *el, UA_UInt64 callbackId);
 
 UA_EXPORT void
 UA_EventLoop_addDelayedCallback(UA_EventLoop *el, UA_DelayedCallback *dc);
+
+UA_EXPORT UA_StatusCode
+UA_EventLoop_removeConnection(UA_EventLoop *el, uintptr_t connectionId);
 
 /* Helper Functions */
 UA_EXPORT const UA_Logger *
@@ -185,6 +193,10 @@ typedef void
 (*UA_ConnectionCallback)(UA_ConnectionManager *cm, uintptr_t connectionId,
                          void **connectionContext, UA_StatusCode status,
                          UA_ByteString msg);
+
+typedef void
+(*UA_ShutdownCallback)(UA_ConnectionManager *cm, uintptr_t connectionId,
+                           void *connectionContext);
 
 struct UA_ConnectionManager {
     /* Every ConnectionManager is treated like an EventSource from the

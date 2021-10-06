@@ -141,10 +141,12 @@ endif()
 
 add_example(client_connect_loop client_connect_loop.c)
 
+
 add_example(client_connectivitycheck_loop client_connectivitycheck_loop.c)
 
 if(UA_ENABLE_SUBSCRIPTIONS)
     add_example(client_subscription_loop client_subscription_loop.c)
+    add_example(client_subscription_eventloop client_subscription_eventloop.c)
 endif()
 
 ####################
@@ -152,6 +154,8 @@ endif()
 ####################
 
 add_example(server_mainloop server_mainloop.c)
+
+add_example(server_eventloop server_eventloop.c)
 
 add_example(server_instantiation server_instantiation.c)
 

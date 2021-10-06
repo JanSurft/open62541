@@ -14,6 +14,10 @@
 #include <open62541/client_subscriptions.h>
 #include <open62541/plugin/log_stdout.h>
 
+#include <ua_util_internal.h>
+
+#include <open62541/plugin/eventloop.h>
+
 #include <signal.h>
 #include <stdlib.h>
 
@@ -23,6 +27,7 @@ static void stopHandler(int sign) {
     UA_LOG_INFO(UA_Log_Stdout, UA_LOGCATEGORY_USERLAND, "Received Ctrl-C");
     running = 0;
 }
+
 
 static void
 handler_currentTimeChanged(UA_Client *client, UA_UInt32 subId, void *subContext,
@@ -115,6 +120,10 @@ main(void) {
     UA_Client *client = UA_Client_new();
     UA_ClientConfig *cc = UA_Client_getConfig(client);
     UA_ClientConfig_setDefault(cc);
+    // UA_Client_setupEventLoop(client);
+
+    // UA_StatusCode rv = UA_EventLoop_start(cc->eventLoop);
+    // UA_CHECK_STATUS(rv, goto cleanup);
 
     /* Set stateCallback */
     cc->stateCallback = stateCallback;
@@ -125,8 +134,8 @@ main(void) {
         /* if already connected, this will return GOOD and do nothing */
         /* if the connection is closed/errored, the connection will be reset and then reconnected */
         /* Alternatively you can also use UA_Client_getState to get the current state */
-        UA_StatusCode retval = UA_Client_connect(client, "opc.tcp://localhost:4840");
-        // UA_StatusCode retval = UA_Client_connect(client, "localhost:4840");
+        // UA_StatusCode retval = UA_Client_connect(client, "opc.tcp://localhost:4840");
+        UA_StatusCode retval = UA_Client_connect(client, "localhost:4840");
         if(retval != UA_STATUSCODE_GOOD) {
             UA_LOG_ERROR(UA_Log_Stdout, UA_LOGCATEGORY_USERLAND,
                          "Not connected. Retrying to connect in 1 second");
@@ -136,9 +145,12 @@ main(void) {
             continue;
         }
 
+        // UA_EventLoop_run(cc->eventLoop, 1000);
+
         UA_Client_run_iterate(client, 1000);
     };
 
+// cleanup:
     /* Clean up */
     UA_Client_delete(client); /* Disconnects the client internally */
     return EXIT_SUCCESS;

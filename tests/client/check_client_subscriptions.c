@@ -104,6 +104,65 @@ deleteSubscriptionsCallback(UA_Client *client, void *userdata, UA_UInt32 request
     UA_DeleteSubscriptionsResponse_copy((const UA_DeleteSubscriptionsResponse *)r,
                                         (UA_DeleteSubscriptionsResponse *)userdata);
 }
+START_TEST(Client_minimal) {
+    UA_Client *client = UA_Client_new();
+    UA_ClientConfig_setDefault(UA_Client_getConfig(client));
+
+    UA_StatusCode retval = UA_Client_connect(client, "opc.tcp://localhost:4840");
+    ck_assert_uint_eq(retval, UA_STATUSCODE_GOOD);
+
+    UA_Client_recv = client->connection.recv;
+    client->connection.recv = UA_Client_recvTesting;
+
+    UA_CreateSubscriptionRequest requestSubscription = UA_CreateSubscriptionRequest_default();
+    UA_CreateSubscriptionResponse responseSubscription = UA_Client_Subscriptions_create(client, requestSubscription,
+                                                                                        NULL, NULL, NULL);
+    ck_assert_uint_eq(responseSubscription.responseHeader.serviceResult, UA_STATUSCODE_GOOD);
+    UA_UInt32 subId = responseSubscription.subscriptionId;
+
+    /* monitor the server state */
+    UA_MonitoredItemCreateRequest requestMonitored =
+        UA_MonitoredItemCreateRequest_default(UA_NODEID_NUMERIC(0, UA_NS0ID_SERVER_SERVERSTATUS_STATE));
+
+    UA_MonitoredItemCreateResult responseMonitored =
+        UA_Client_MonitoredItems_createDataChange(client, responseSubscription.subscriptionId,
+                                                  UA_TIMESTAMPSTORETURN_BOTH,
+                                                  requestMonitored, NULL, dataChangeHandler, NULL);
+    ck_assert_uint_eq(responseMonitored.statusCode, UA_STATUSCODE_GOOD);
+    UA_UInt32 monId = responseMonitored.monitoredItemId;
+
+    /* manually control the server thread */
+    running = false;
+    THREAD_JOIN(server_thread);
+
+    UA_Server_run_iterate(server, true);
+    retval = UA_Client_run_iterate(client, 1);
+    ck_assert_uint_eq(retval, UA_STATUSCODE_GOOD);
+
+    UA_fakeSleep((UA_UInt32)publishingInterval + 1);
+
+    notificationReceived = false;
+    UA_Server_run_iterate(server, true);
+    ck_assert_uint_eq(retval, UA_STATUSCODE_GOOD);
+
+    /* run the server in an independent thread again */
+    running = true;
+    THREAD_CREATE(server_thread, serverloop);
+
+    retval = UA_Client_MonitoredItems_deleteSingle(client, subId, monId);
+    ck_assert_uint_eq(retval, UA_STATUSCODE_GOOD);
+
+    retval = UA_Client_Subscriptions_deleteSingle(client, subId);
+    ck_assert_uint_eq(retval, UA_STATUSCODE_GOOD);
+
+    retval = UA_Client_run_iterate(client, 1);
+    ck_assert_uint_eq(retval, UA_STATUSCODE_GOOD);
+    ck_assert_uint_eq(notificationReceived, true);
+
+    UA_Client_disconnect(client);
+    UA_Client_delete(client);
+}
+END_TEST
 
 START_TEST(Client_subscription) {
     UA_Client *client = UA_Client_new();
@@ -830,6 +889,8 @@ START_TEST(Client_subscription_connectionClose) {
     UA_SessionState ss;
     UA_Client_getState(client, NULL, &ss, NULL);
     ck_assert_uint_eq(ss, UA_SESSIONSTATE_CREATED);
+
+    UA_Client_recvTesting_result = UA_STATUSCODE_GOOD;
     while(ss != UA_SESSIONSTATE_ACTIVATED) {
         UA_Client_run_iterate(client, 1);
         UA_Client_getState(client, NULL, &ss, NULL);
@@ -1167,6 +1228,14 @@ stateCallback(UA_Client *client, UA_SecureChannelState channelState,
         /* A new session was created. We need to create the subscription. */
         UA_CreateSubscriptionRequest request = UA_CreateSubscriptionRequest_default();
         request.requestedMaxKeepAliveCount = 1;
+        /*
+         * TODO: creating synchronious subscription in stateCallback is illegal --
+         * The stateCallback is called when the eventloop is within the running and
+         * a change of the client state is notifier. The synchronous subscription call
+         * below needs to iterate the eventloop another time because it needs to get
+         * the response for the subscription request.
+         * This is illegal How to deal with this?
+         */
         UA_CreateSubscriptionResponse response = UA_Client_Subscriptions_create(client, request,
                                                                                 NULL, NULL, NULL);
         ck_assert_uint_eq(response.responseHeader.serviceResult, UA_STATUSCODE_GOOD);
@@ -1491,16 +1560,25 @@ static Suite* testSuite_Client(void) {
     TCase *tc_client = tcase_create("Client Subscription Basic");
     tcase_add_checked_fixture(tc_client, setup, teardown);
     tcase_add_test(tc_client, Client_subscription);
+    tcase_add_test(tc_client, Client_minimal);
     tcase_add_test(tc_client, Client_subscription_async);
     tcase_add_test(tc_client, Client_subscription_statusChange);
+
+    // /* TODO: This test-case logs errors on the eventloop and Inactivity for Subscription */
     tcase_add_test(tc_client, Client_subscription_timeout);
+
     tcase_add_test(tc_client, Client_subscription_detach);
+    /* TODO: still some invalid reads on valigrind */
     tcase_add_test(tc_client, Client_subscription_connectionClose);
+
     tcase_add_test(tc_client, Client_subscription_createDataChanges);
     tcase_add_test(tc_client, Client_subscription_modifyMonitoredItem);
+
     tcase_add_test(tc_client, Client_subscription_createDataChanges_async);
     tcase_add_test(tc_client, Client_subscription_keepAlive);
     tcase_add_test(tc_client, Client_subscription_without_notification);
+
+    /* TODO: this test-case introduces illegal recursive recv calls */
     tcase_add_test(tc_client, Client_subscription_async_sub);
     tcase_add_test(tc_client, Client_subscription_reconnect);
     tcase_add_test(tc_client, Client_subscription_transfer);
