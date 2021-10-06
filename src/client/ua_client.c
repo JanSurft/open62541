@@ -19,7 +19,6 @@
  *    Copyright 2021 (c) Fraunhofer IOSB (Author: Jan Hermes)
  */
 
-#include <open62541/types_generated_encoding_binary.h>
 #include <open62541/transport_generated.h>
 
 #include "ua_client_internal.h"
@@ -680,19 +679,12 @@ UA_Client_backgroundConnectivity(UA_Client *client) {
         client->pendingConnectivityCheck = true;
 }
 
-static void
-clientExecuteRepeatedCallback(void *executionApplication, UA_ApplicationCallback cb,
-                              void *callbackApplication, void *data) {
-    cb(callbackApplication, data);
-}
-
 UA_StatusCode
 UA_Client_run_iterate(UA_Client *client, UA_UInt32 timeout) {
     /* Process timed (repeated) jobs */
     UA_DateTime now = UA_DateTime_nowMonotonic();
     UA_DateTime maxDate =
-        UA_Timer_process(&client->timer, now, (UA_TimerExecutionCallback)
-                         clientExecuteRepeatedCallback, client);
+        UA_EventLoop_processTimer(client->config.eventLoop, now);
     if(maxDate > now + ((UA_DateTime)timeout * UA_DATETIME_MSEC))
         maxDate = now + ((UA_DateTime)timeout * UA_DATETIME_MSEC);
 
