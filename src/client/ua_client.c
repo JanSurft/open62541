@@ -113,10 +113,6 @@ UA_Client_clear(UA_Client *client) {
     UA_Client_Subscriptions_clean(client);
 #endif
 
-    /* Delete the eventloop */
-    if (!client->config.externalEventLoop) {
-       UA_EventLoop_delete(client->config.eventLoop);
-    }
 }
 
 void
