@@ -624,16 +624,6 @@ UA_Server_run_startup(UA_Server *server) {
     return result;
 }
 
-// static void
-// serverExecuteRepeatedCallback(UA_Server *server, UA_Callback cb,
-//                               void *callbackApplication, void *data) {
-//     /* Service mutex is not set inside the timer that triggers the callback */
-//     /* The following check cannot be used since another thread can take the
-//      * serviceMutex during a server_iterate_call. */
-//     //UA_LOCK_ASSERT(&server->serviceMutex, 0);
-//     cb(callbackApplication, data);
-// }
-
 UA_UInt16
 UA_Server_run_iterate(UA_Server *server, UA_Boolean waitInternal) {
     /* Process repeated work */
