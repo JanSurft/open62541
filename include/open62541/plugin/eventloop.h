@@ -172,6 +172,10 @@ UA_EXPORT UA_StatusCode
 UA_EventLoop_deregisterEventSource(UA_EventLoop *el,
                                    UA_EventSource *es);
 
+UA_EXPORT UA_DateTime
+UA_EventLoop_processTimer(UA_EventLoop *el,
+                          UA_DateTime nowMonotonic);
+
 /**
  * Connection Manager
  * ------------------
