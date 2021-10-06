@@ -325,8 +325,8 @@ freeTimerEntry(UA_TimerEntry *te, void *data) {
 }
 
 /* Process and then free registered delayed callbacks */
-static void
-processDelayed(UA_EventLoop *el) {
+void
+UA_EventLoop_processDelayed(UA_EventLoop *el) {
     UA_LOCK_ASSERT(&el->elMutex, 1);
     while(el->delayedCallbacks) {
         UA_DelayedCallback *dc = el->delayedCallbacks;

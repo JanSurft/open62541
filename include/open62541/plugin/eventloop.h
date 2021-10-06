@@ -176,6 +176,9 @@ UA_EXPORT UA_DateTime
 UA_EventLoop_processTimer(UA_EventLoop *el,
                           UA_DateTime nowMonotonic);
 
+UA_EXPORT void
+UA_EventLoop_processDelayed(UA_EventLoop *el);
+
 /**
  * Connection Manager
  * ------------------
