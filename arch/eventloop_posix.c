@@ -507,6 +507,7 @@ UA_EventLoop_run(UA_EventLoop *el, UA_UInt32 timeout) {
         UA_LOG_ERROR(el->logger,
                      UA_LOGCATEGORY_EVENTLOOP,
                      "Cannot run eventloop from the run method itself");
+        UA_UNLOCK(&el->elMutex);
         return UA_STATUSCODE_BADINTERNALERROR;
     }
     /* TODO: use check macros instead
