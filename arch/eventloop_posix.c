@@ -307,8 +307,8 @@ processTimerEntry(UA_EventLoop *el, UA_DateTime nowMonotonic, UA_TimerEntry *fir
 }
 
 /* Returns the DateTime of the next cylic callback */
-static UA_DateTime
-processTimer(UA_EventLoop *el, UA_DateTime nowMonotonic) {
+UA_DateTime
+UA_EventLoop_processTimer(UA_EventLoop *el, UA_DateTime nowMonotonic) {
     UA_TimerEntry *first = ZIP_MIN(UA_TimerZip, &el->timerRoot);
     while(first && first->nextTime <= nowMonotonic) {
 
@@ -509,11 +509,13 @@ UA_EventLoop_run(UA_EventLoop *el, UA_UInt32 timeout) {
     }
 
     /* Process cyclic callbacks */
-    UA_DateTime now = UA_DateTime_nowMonotonic();
-    UA_DateTime timeToNextCallback = processTimer(el, now);
-    UA_DateTime processTimerDuration = UA_DateTime_nowMonotonic() - now;
+    UA_DateTime dateBeforeCallback = UA_DateTime_nowMonotonic();
+    UA_DateTime dateOfNextCallback = UA_EventLoop_processTimer(el, dateBeforeCallback);
+    UA_DateTime dateAfterCallback = UA_DateTime_nowMonotonic();
 
-    UA_DateTime callbackTimeout = timeToNextCallback - now;
+    UA_DateTime processTimerDuration = dateAfterCallback - dateBeforeCallback;
+
+    UA_DateTime callbackTimeout = dateOfNextCallback - dateAfterCallback;
     UA_DateTime maxTimeout = UA_MAX(timeout * UA_DATETIME_MSEC - processTimerDuration, 0);
 
     UA_DateTime usedTimeout = UA_MIN(callbackTimeout, maxTimeout);
