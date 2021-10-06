@@ -737,6 +737,8 @@ UA_Client_run_iterate(UA_Client *client, UA_UInt32 timeout) {
     /* Did async services time out? Process callbacks with an error code */
     asyncServiceTimeoutCheck(client);
 
+    UA_EventLoop_processDelayed(client->config.eventLoop);
+
     /* Log and notify user if the client state has changed */
     notifyClientState(client);
 

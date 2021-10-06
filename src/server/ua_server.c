@@ -675,6 +675,8 @@ UA_Server_run_iterate(UA_Server *server, UA_Boolean waitInternal) {
 
     UA_UNLOCK(&server->serviceMutex);
 
+    UA_EventLoop_processDelayed(server->config.eventLoop);
+
     now = UA_DateTime_nowMonotonic();
     timeout = 0;
     if(nextRepeated > now)
