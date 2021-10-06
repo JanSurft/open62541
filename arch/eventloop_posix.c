@@ -307,8 +307,8 @@ processTimerEntry(UA_EventLoop *el, UA_DateTime nowMonotonic, UA_TimerEntry *fir
 }
 
 /* Returns the DateTime of the next cylic callback */
-UA_DateTime
-UA_EventLoop_processTimer(UA_EventLoop *el, UA_DateTime nowMonotonic) {
+static UA_DateTime
+processTimer(UA_EventLoop *el, UA_DateTime nowMonotonic) {
     UA_TimerEntry *first = ZIP_MIN(UA_TimerZip, &el->timerRoot);
     while(first && first->nextTime <= nowMonotonic) {
 
@@ -319,14 +319,25 @@ UA_EventLoop_processTimer(UA_EventLoop *el, UA_DateTime nowMonotonic) {
     return (first) ? first->nextTime : UA_INT64_MAX;
 }
 
+
+UA_DateTime
+UA_EventLoop_processTimer(UA_EventLoop *el, UA_DateTime nowMonotonic) {
+    UA_LOCK(&el->elMutex);
+    UA_DateTime nextCallbackDate = processTimer(el, nowMonotonic);
+    UA_UNLOCK(&el->elMutex);
+    return nextCallbackDate;
+}
+
+
 static void
 freeTimerEntry(UA_TimerEntry *te, void *data) {
     UA_free(te);
 }
 
 /* Process and then free registered delayed callbacks */
+static
 void
-UA_EventLoop_processDelayed(UA_EventLoop *el) {
+processDelayed(UA_EventLoop *el) {
     UA_LOCK_ASSERT(&el->elMutex, 1);
     while(el->delayedCallbacks) {
         UA_DelayedCallback *dc = el->delayedCallbacks;
@@ -340,6 +351,13 @@ UA_EventLoop_processDelayed(UA_EventLoop *el) {
         }
         UA_free(dc);
     }
+}
+
+void
+UA_EventLoop_processDelayed(UA_EventLoop *el) {
+    UA_LOCK(&el->elMutex);
+    processDelayed(el);
+    UA_UNLOCK(&el->elMutex);
 }
 
 /***********************/
@@ -383,7 +401,7 @@ UA_EventLoop_delete(UA_EventLoop *el) {
     ZIP_ITER(UA_TimerZip, &el->timerRoot, freeTimerEntry, NULL);
 
     /* Process remaining delayed callbacks */
-    UA_EventLoop_processDelayed(el);
+    processDelayed(el);
 
     /* free the file descriptors */
     UA_free(el->fds);
@@ -510,7 +528,7 @@ UA_EventLoop_run(UA_EventLoop *el, UA_UInt32 timeout) {
 
     /* Process cyclic callbacks */
     UA_DateTime dateBeforeCallback = UA_DateTime_nowMonotonic();
-    UA_DateTime dateOfNextCallback = UA_EventLoop_processTimer(el, dateBeforeCallback);
+    UA_DateTime dateOfNextCallback = processTimer(el, dateBeforeCallback);
     UA_DateTime dateAfterCallback = UA_DateTime_nowMonotonic();
 
     UA_DateTime processTimerDuration = dateAfterCallback - dateBeforeCallback;
@@ -577,7 +595,7 @@ UA_EventLoop_run(UA_EventLoop *el, UA_UInt32 timeout) {
     }
 
     /* Process and then free registered delayed callbacks */
-    UA_EventLoop_processDelayed(el);
+    processDelayed(el);
 
     /* Check if the last EventSource was successfully stopped */
     if(el->state == UA_EVENTLOOPSTATE_STOPPING) {
