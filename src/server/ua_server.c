@@ -205,12 +205,8 @@ void UA_Server_delete(UA_Server *server) {
 
     UA_UNLOCK(&server->serviceMutex); /* The timer has its own mutex */
 
-    /* TODO: Execute all remaining delayed events and clean up the timer */
-    UA_LOG_WARNING(&server->config.logger, UA_LOGCATEGORY_SERVER,
-                   "need to do the cleanup with eventloop");
-    // UA_Timer_process(&server->timer, UA_DateTime_nowMonotonic() + 1,
-    //          (UA_TimerExecutionCallback)serverExecuteRepeatedCallback, server);
-    // UA_Timer_clear(&server->timer);
+    /* Execute all remaining delayed events */
+    UA_EventLoop_processDelayed(server->config.eventLoop);
 
     /* Clean up the config */
     UA_ServerConfig_clean(&server->config);
