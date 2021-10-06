@@ -156,10 +156,6 @@ cleanup:
 /* Server Lifecycle */
 /********************/
 
-static void
-serverExecuteRepeatedCallback(UA_Server *server, UA_ApplicationCallback cb,
-                              void *callbackApplication, void *data);
-
 /* The server needs to be stopped before it can be deleted */
 void UA_Server_delete(UA_Server *server) {
     UA_LOCK(&server->serviceMutex);
@@ -343,6 +339,7 @@ UA_Server_newWithConfig(UA_ServerConfig *config) {
     for(size_t i = 0; i < server->config.securityPoliciesSize; i++)
         server->config.securityPolicies[i].logger = &server->config.logger;
 
+    server->config.eventLoop = UA_EventLoop_new(&server->config.logger);
     /* Reset the old config */
     memset(config, 0, sizeof(UA_ServerConfig));
     return UA_Server_init(server);
@@ -645,8 +642,7 @@ UA_UInt16
 UA_Server_run_iterate(UA_Server *server, UA_Boolean waitInternal) {
     /* Process repeated work */
     UA_DateTime now = UA_DateTime_nowMonotonic();
-    UA_DateTime nextRepeated = UA_Timer_process(&server->timer, now,
-                     (UA_TimerExecutionCallback)serverExecuteRepeatedCallback, server);
+    UA_DateTime nextRepeated = UA_EventLoop_processTimer(server->config.eventLoop, now);
     UA_DateTime latest = now + (UA_MAXTIMEOUT * UA_DATETIME_MSEC);
     if(nextRepeated > latest)
         nextRepeated = latest;
