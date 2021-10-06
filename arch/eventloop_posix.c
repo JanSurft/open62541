@@ -383,7 +383,7 @@ UA_EventLoop_delete(UA_EventLoop *el) {
     ZIP_ITER(UA_TimerZip, &el->timerRoot, freeTimerEntry, NULL);
 
     /* Process remaining delayed callbacks */
-    processDelayed(el);
+    UA_EventLoop_processDelayed(el);
 
     /* free the file descriptors */
     UA_free(el->fds);
@@ -577,7 +577,7 @@ UA_EventLoop_run(UA_EventLoop *el, UA_UInt32 timeout) {
     }
 
     /* Process and then free registered delayed callbacks */
-    processDelayed(el);
+    UA_EventLoop_processDelayed(el);
 
     /* Check if the last EventSource was successfully stopped */
     if(el->state == UA_EVENTLOOPSTATE_STOPPING) {
