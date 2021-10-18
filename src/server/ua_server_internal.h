@@ -110,9 +110,6 @@ struct UA_Server {
     size_t namespacesSize;
     UA_String *namespaces;
 
-    /* Callbacks with a repetition interval */
-    // UA_Timer timer;
-
     /* For bootstrapping, omit some consistency checks, creating a reference to
      * the parent and member instantiation */
     UA_Boolean bootstrapNS0;
