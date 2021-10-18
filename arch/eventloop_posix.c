@@ -752,8 +752,10 @@ UA_EventLoop_deregisterFD(UA_EventLoop *el, UA_FD fd) {
         el->fds[i] = el->fds[el->fdsSize];
         UA_RegisteredFD *fds_tmp = (UA_RegisteredFD*)
             UA_realloc(el->fds, sizeof(UA_RegisteredFD) * el->fdsSize);
-        /* no need to check-mem for el->fds because occupied size will decrease */
-        el->fds = fds_tmp;
+        /* if realloc fails the fds are still in a correct state with 
+         * possibly lost memory, so failing silently here is ok */
+        if (fds_tmp)
+            el->fds = fds_tmp;
     } else {
         /* Remove the last entry */
         UA_free(el->fds);
