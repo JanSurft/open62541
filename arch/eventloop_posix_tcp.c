@@ -352,7 +352,7 @@ TCP_sendWithConnection(UA_ConnectionManager *cm, uintptr_t connectionId,
                          "attempting to send with fd: %d", (UA_FD) connectionId);
             size_t bytes_to_send = buf->length - nWritten;
             n = UA_send((UA_FD)connectionId,
-                        (const char*)(buf->data + nWritten),
+                        (const char*)buf->data + nWritten,
                         bytes_to_send, flags);
             if(n < 0 && UA_ERRNO != UA_INTERRUPTED && UA_ERRNO != UA_AGAIN) {
                 UA_LOG_SOCKET_ERRNO_GAI_WRAP(
