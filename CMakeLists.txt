@@ -128,6 +128,7 @@ set(ua_architecture_sources ${ua_architecture_sources}
 set(ua_architecture_headers ${ua_architecture_headers}
     ${PROJECT_SOURCE_DIR}/include/open62541/network_tcp.h
     ${PROJECT_SOURCE_DIR}/include/open62541/architecture_functions.h
+    ${PROJECT_SOURCE_DIR}/arch/eventloop_posix.h
 )
 
 if(UA_ENABLE_WEBSOCKET_SERVER)
