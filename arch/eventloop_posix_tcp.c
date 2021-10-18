@@ -93,8 +93,7 @@ TCP_connectionSocketCallback(UA_ConnectionManager *cm, UA_FD fd,
 
         /* Now we are interested in read-events. */
         UA_EventLoop_modifyFD(cm->eventSource.eventLoop, fd, UA_POSIX_EVENT_READ,
-                              (void (*)(struct UA_EventSource *, int, void *, short))
-                              TCP_connectionSocketCallback, *fdcontext);
+                              (UA_FDCallback) TCP_connectionSocketCallback, *fdcontext);
         return;
     }
 
