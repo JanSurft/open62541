@@ -5,6 +5,8 @@
  *    Copyright 2021 (c) Fraunhofer IOSB (Author: Julius Pfrommer)
  */
 
+#include <open62541/config.h>
+
 #include "eventloop_posix.h"
 
 #define UA_MAXBACKLOG 100
@@ -30,9 +32,10 @@ TCP_freeNetworkBuffer(UA_ConnectionManager *cm, uintptr_t connectionId,
 /* Set the socket non-blocking */
 static UA_StatusCode
 TCP_setNonBlocking(UA_FD sockfd) {
-    int opts = fcntl(sockfd, F_GETFL);
-    if(opts < 0 || fcntl(sockfd, F_SETFL, opts | O_NONBLOCK) < 0)
+    unsigned int ret = UA_socket_set_nonblocking(sockfd);
+    if (ret != 0) {
         return UA_STATUSCODE_BADINTERNALERROR;
+    }
     return UA_STATUSCODE_GOOD;
 }
 
