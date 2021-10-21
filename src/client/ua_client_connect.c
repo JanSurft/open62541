@@ -9,6 +9,8 @@
 #include <open62541/transport_generated.h>
 #include <open62541/transport_generated_handling.h>
 
+#include "ua_util_internal.h"
+
 #include "ua_client_internal.h"
 #include "ua_types_encoding_binary.h"
 

@@ -16,6 +16,7 @@
  *    Copyright 2017 (c) Mark Giraud, Fraunhofer IOSB
  *    Copyright 2018 (c) Kalycito Infotech Private Limited
  *    Copyright 2020 (c) Christian von Arnim, ISW University of Stuttgart
+ *    Copyright 2021 (c) Fraunhofer IOSB (Author: Jan Hermes)
  */
 
 #include <open62541/transport_generated.h>
@@ -23,6 +24,7 @@
 #include "ua_client_internal.h"
 #include "ua_connection_internal.h"
 #include "ua_types_encoding_binary.h"
+#include "ua_util_internal.h"
 
 /********************/
 /* Client Lifecycle */
@@ -32,7 +34,6 @@ static void
 UA_Client_init(UA_Client* client) {
     UA_SecureChannel_init(&client->channel, &client->config.localConnectionConfig);
     client->connectStatus = UA_STATUSCODE_GOOD;
-    UA_Timer_init(&client->timer);
     notifyClientState(client);
 }
 
@@ -70,6 +71,19 @@ UA_ClientConfig_clear(UA_ClientConfig *config) {
     UA_free(config->securityPolicies);
     config->securityPolicies = 0;
 
+    /* Stop and delete the EventLoop */
+    if(config->eventLoop && !config->externalEventLoop) {
+        if(UA_EventLoop_getState(config->eventLoop) != UA_EVENTLOOPSTATE_FRESH &&
+           UA_EventLoop_getState(config->eventLoop) != UA_EVENTLOOPSTATE_STOPPED) {
+            UA_EventLoop_stop(config->eventLoop);
+            while(UA_EventLoop_getState(config->eventLoop) != UA_EVENTLOOPSTATE_STOPPED) {
+                UA_EventLoop_run(config->eventLoop, 100);
+            }
+        }
+        UA_EventLoop_delete(config->eventLoop);
+        config->eventLoop = NULL;
+    }
+
     /* Logger */
     if(config->logger.clear)
         config->logger.clear(config->logger.context);
@@ -99,8 +113,6 @@ UA_Client_clear(UA_Client *client) {
     UA_Client_Subscriptions_clean(client);
 #endif
 
-    /* Delete the timed work */
-    UA_Timer_clear(&client->timer);
 }
 
 void
@@ -592,30 +604,34 @@ UA_Client_sendAsyncRequest(UA_Client *client, const void *request,
 UA_StatusCode UA_EXPORT
 UA_Client_addTimedCallback(UA_Client *client, UA_ClientCallback callback,
                            void *data, UA_DateTime date, UA_UInt64 *callbackId) {
-    return UA_Timer_addTimedCallback(&client->timer, (UA_ApplicationCallback)callback,
+    return UA_EventLoop_addTimedCallback(client->config.eventLoop, (UA_Callback)callback,
                                      client, data, date, callbackId);
 }
 
 UA_StatusCode
 UA_Client_addRepeatedCallback(UA_Client *client, UA_ClientCallback callback,
                               void *data, UA_Double interval_ms, UA_UInt64 *callbackId) {
-    return UA_Timer_addRepeatedCallback(&client->timer, (UA_ApplicationCallback)callback,
-                                        client, data, interval_ms, NULL,
-                                        UA_TIMER_HANDLE_CYCLEMISS_WITH_CURRENTTIME, callbackId);
+
+    return UA_EventLoop_addCyclicCallback(
+        client->config.eventLoop, (UA_Callback)callback, client, data,
+        interval_ms, NULL, UA_TIMER_HANDLE_CYCLEMISS_WITH_CURRENTTIME, callbackId);
 }
 
 UA_StatusCode
 UA_Client_changeRepeatedCallbackInterval(UA_Client *client, UA_UInt64 callbackId,
                                          UA_Double interval_ms) {
-    return UA_Timer_changeRepeatedCallback(&client->timer, callbackId, interval_ms, NULL, UA_TIMER_HANDLE_CYCLEMISS_WITH_CURRENTTIME);
+    return UA_EventLoop_modifyCyclicCallback(client->config.eventLoop, callbackId,
+                                             interval_ms, NULL, UA_TIMER_HANDLE_CYCLEMISS_WITH_CURRENTTIME);
 }
 
 void
 UA_Client_removeCallback(UA_Client *client, UA_UInt64 callbackId) {
-    UA_Timer_removeCallback(&client->timer, callbackId);
+    UA_StatusCode rv = UA_EventLoop_removeCyclicCallback(client->config.eventLoop, callbackId);
+    UA_CHECK_STATUS_WARN(rv, return, &client->config.logger, UA_LOGCATEGORY_CLIENT,
+                         "failed removing callback: %ld", callbackId);
 }
 
-static void
+void
 asyncServiceTimeoutCheck(UA_Client *client) {
     AsyncServiceCall *ac, *ac_tmp;
     UA_DateTime now = UA_DateTime_nowMonotonic();
@@ -641,7 +657,7 @@ backgroundConnectivityCallback(UA_Client *client, void *userdata,
     client->lastConnectivityCheck = UA_DateTime_nowMonotonic();
 }
 
-static void
+void
 UA_Client_backgroundConnectivity(UA_Client *client) {
     if(!client->config.connectivityCheckInterval)
         return;
@@ -672,19 +688,12 @@ UA_Client_backgroundConnectivity(UA_Client *client) {
         client->pendingConnectivityCheck = true;
 }
 
-static void
-clientExecuteRepeatedCallback(void *executionApplication, UA_ApplicationCallback cb,
-                              void *callbackApplication, void *data) {
-    cb(callbackApplication, data);
-}
-
 UA_StatusCode
 UA_Client_run_iterate(UA_Client *client, UA_UInt32 timeout) {
     /* Process timed (repeated) jobs */
     UA_DateTime now = UA_DateTime_nowMonotonic();
     UA_DateTime maxDate =
-        UA_Timer_process(&client->timer, now, (UA_TimerExecutionCallback)
-                         clientExecuteRepeatedCallback, client);
+        UA_EventLoop_processTimer(client->config.eventLoop, now);
     if(maxDate > now + ((UA_DateTime)timeout * UA_DATETIME_MSEC))
         maxDate = now + ((UA_DateTime)timeout * UA_DATETIME_MSEC);
 
@@ -727,6 +736,8 @@ UA_Client_run_iterate(UA_Client *client, UA_UInt32 timeout) {
 
     /* Did async services time out? Process callbacks with an error code */
     asyncServiceTimeoutCheck(client);
+
+    UA_EventLoop_processDelayed(client->config.eventLoop);
 
     /* Log and notify user if the client state has changed */
     notifyClientState(client);

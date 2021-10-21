@@ -6,6 +6,7 @@
  */
 
 #include "eventloop_posix.h"
+
 #include "ziptree.h"
 
 typedef struct UA_TimerEntry {
@@ -58,6 +59,9 @@ struct UA_EventLoop {
     /* Registered file descriptors */
     size_t fdsSize;
     UA_RegisteredFD *fds;
+
+    /* Flag determining whether the eventloop is currently within the "run" method */
+    UA_Boolean executing;
 
 #if UA_MULTITHREADING >= 100
     UA_Lock elMutex;
@@ -118,38 +122,17 @@ calculateNextTime(UA_DateTime currentTime, UA_DateTime baseTime,
     return currentTime + interval - cycleDelay;
 }
 
+static
 UA_StatusCode
-UA_EventLoop_addCyclicCallback(UA_EventLoop *el, UA_Callback cb,
-                               void *application, void *data, UA_Double interval_ms,
-                               UA_DateTime *baseTime, UA_TimerPolicy timerPolicy,
-                               UA_UInt64 *callbackId) {
-    /* A callback method needs to be present */
-    if(!cb)
-        return UA_STATUSCODE_BADINTERNALERROR;
-
-    /* The interval needs to be positive */
-    if(interval_ms <= 0.0)
-        return UA_STATUSCODE_BADINTERNALERROR;
-    UA_UInt64 interval = (UA_UInt64)(interval_ms * UA_DATETIME_MSEC);
-    if(interval == 0)
-        return UA_STATUSCODE_BADINTERNALERROR;
+addCallback(UA_EventLoop *el, UA_Callback cb, void *application, void *data,
+            UA_TimerPolicy timerPolicy, UA_UInt64 *callbackId, UA_UInt64 interval,
+            UA_DateTime nextTime) { /* Set the repeated callback */
 
     /* Allocate the repeated callback structure */
     UA_TimerEntry *te = (UA_TimerEntry*)UA_malloc(sizeof(UA_TimerEntry));
     if(!te)
         return UA_STATUSCODE_BADOUTOFMEMORY;
 
-    /* Compute the first time for execution */
-    UA_DateTime currentTime = UA_DateTime_nowMonotonic();
-    UA_DateTime nextTime;
-    if(baseTime == NULL) {
-        /* Use "now" as the basetime */
-        nextTime = currentTime + (UA_DateTime)interval;
-    } else {
-        nextTime = calculateNextTime(currentTime, *baseTime, (UA_DateTime)interval);
-    }
-
-    /* Set the repeated callback */
     te->interval = interval;
     te->callback = cb;
     te->application = application;
@@ -167,6 +150,45 @@ UA_EventLoop_addCyclicCallback(UA_EventLoop *el, UA_Callback cb,
     UA_UNLOCK(&el->elMutex);
 
     return UA_STATUSCODE_GOOD;
+}
+
+UA_StatusCode
+UA_EventLoop_addTimedCallback(UA_EventLoop *el, UA_Callback callback,
+                              void *application, void *data, UA_DateTime date,
+                              UA_UInt64 *callbackId) {
+    UA_StatusCode res = addCallback(el, callback, application, data,
+                                    UA_TIMER_HANDLE_CYCLEMISS_WITH_CURRENTTIME, callbackId, 0, date);
+    return res;
+}
+
+UA_StatusCode
+UA_EventLoop_addCyclicCallback(UA_EventLoop *el, UA_Callback cb,
+                               void *application, void *data, UA_Double interval_ms,
+                               UA_DateTime *baseTime, UA_TimerPolicy timerPolicy,
+                               UA_UInt64 *callbackId) {
+    /* A callback method needs to be present */
+    if(!cb)
+        return UA_STATUSCODE_BADINTERNALERROR;
+
+    /* The interval needs to be positive */
+    if(interval_ms <= 0.0)
+        return UA_STATUSCODE_BADINTERNALERROR;
+    UA_UInt64 interval = (UA_UInt64)(interval_ms * UA_DATETIME_MSEC);
+    if(interval == 0)
+        return UA_STATUSCODE_BADINTERNALERROR;
+
+
+    /* Compute the first time for execution */
+    UA_DateTime currentTime = UA_DateTime_nowMonotonic();
+    UA_DateTime nextTime;
+    if(baseTime == NULL) {
+        /* Use "now" as the basetime */
+        nextTime = currentTime + (UA_DateTime)interval;
+    } else {
+        nextTime = calculateNextTime(currentTime, *baseTime, (UA_DateTime)interval);
+    }
+    return addCallback(el, cb, application, data, timerPolicy, callbackId, interval,
+                       nextTime);
 }
 
 UA_StatusCode
@@ -232,50 +254,80 @@ UA_EventLoop_addDelayedCallback(UA_EventLoop *el, UA_DelayedCallback *dc) {
     UA_UNLOCK(&el->elMutex);
 }
 
+static void
+processTimerEntry(UA_EventLoop *el, UA_DateTime nowMonotonic, UA_TimerEntry *first) {
+
+    /* Reinsert / remove to their new position first. Because the
+    * callback can interact with the zip tree and expects the
+    * same entries in the root and idRoot trees. */
+    ZIP_REMOVE(UA_TimerZip, &el->timerRoot, first);
+
+    UA_Callback cb = first->callback;
+    void *app = first->application;
+    void *data = first->data;
+
+    /* Handle timed callbacks that will not be reinserted */
+    if(first->interval == 0) {
+        ZIP_REMOVE(UA_TimerIdZip, &el->timerIdRoot, first);
+        if(first->callback) {
+            UA_UNLOCK(&el->elMutex);
+            cb(app, data);
+            UA_LOCK(&el->elMutex);
+        }
+        UA_free(first);
+        return;
+    }
+
+    /* Set the time for the next execution. Prevent an infinite loop by
+    * forcing the execution time in the next iteration.
+    *
+    * If the timer policy is "CurrentTime", then there is at least the
+    * interval between executions. This is used for Monitoreditems, for
+    * which the spec says: The sampling interval indicates the fastest rate
+    * at which the Server should sample its underlying source for data
+    * changes. (Part 4, 5.12.1.2) */
+    first->nextTime += (UA_DateTime)first->interval;
+    if(first->nextTime < nowMonotonic) {
+        if(first->timerPolicy == UA_TIMER_HANDLE_CYCLEMISS_WITH_BASETIME)
+            first->nextTime = calculateNextTime(nowMonotonic, first->nextTime,
+                                                (UA_DateTime)first->interval);
+        else
+            first->nextTime = nowMonotonic + (UA_DateTime)first->interval;
+    }
+
+    ZIP_INSERT(UA_TimerZip, &el->timerRoot, first, ZIP_RANK(first, zipfields));
+
+    /* Unlock the mutex before dropping into the callback. So that the timer
+     * itself can be edited within the callback. When we return, only the
+     * pointer to el must still exist. */
+
+    UA_UNLOCK(&el->elMutex);
+    cb(app, data);
+    UA_LOCK(&el->elMutex);
+}
+
 /* Returns the DateTime of the next cylic callback */
 static UA_DateTime
 processTimer(UA_EventLoop *el, UA_DateTime nowMonotonic) {
-    UA_TimerEntry *first;
-    while((first = ZIP_MIN(UA_TimerZip, &el->timerRoot)) &&
-          first->nextTime <= nowMonotonic) {
-        /* Reinsert / remove to their new position first. Because the callback
-         * can interact with the zip tree and expects the same entries in the
-         * root and idRoot trees. */
-        ZIP_REMOVE(UA_TimerZip, &el->timerRoot, first);
+    UA_TimerEntry *first = ZIP_MIN(UA_TimerZip, &el->timerRoot);
+    while(first && first->nextTime <= nowMonotonic) {
 
-        /* Set the time for the next execution. Prevent an infinite loop by
-         * forcing the execution time in the next iteration.
-         *
-         * If the timer policy is "CurrentTime", then there is at least the
-         * interval between executions. This is used for Monitoreditems, for
-         * which the spec says: The sampling interval indicates the fastest rate
-         * at which the Server should sample its underlying source for data
-         * changes. (Part 4, 5.12.1.2) */
-        first->nextTime += (UA_DateTime)first->interval;
-        if(first->nextTime < nowMonotonic) {
-            if(first->timerPolicy == UA_TIMER_HANDLE_CYCLEMISS_WITH_BASETIME)
-                first->nextTime = calculateNextTime(nowMonotonic, first->nextTime,
-                                                    (UA_DateTime)first->interval);
-            else
-                first->nextTime = nowMonotonic + (UA_DateTime)first->interval;
-        }
-
-        ZIP_INSERT(UA_TimerZip, &el->timerRoot, first, ZIP_RANK(first, zipfields));
-
-        /* Unlock the mutex before dropping into the callback. So that the timer
-         * itself can be edited within the callback. When we return, only the
-         * pointer to el must still exist. */
-        UA_Callback cb = first->callback;
-        void *app = first->application;
-        void *data = first->data;
-        UA_UNLOCK(&el->elMutex);
-        cb(app, data);
-        UA_LOCK(&el->elMutex);
+        processTimerEntry(el, nowMonotonic, first);
+        first = ZIP_MIN(UA_TimerZip, &el->timerRoot);
     }
-
     /* Return the timestamp of the earliest next callback */
     return (first) ? first->nextTime : UA_INT64_MAX;
 }
+
+
+UA_DateTime
+UA_EventLoop_processTimer(UA_EventLoop *el, UA_DateTime nowMonotonic) {
+    UA_LOCK(&el->elMutex);
+    UA_DateTime nextCallbackDate = processTimer(el, nowMonotonic);
+    UA_UNLOCK(&el->elMutex);
+    return nextCallbackDate;
+}
+
 
 static void
 freeTimerEntry(UA_TimerEntry *te, void *data) {
@@ -283,7 +335,8 @@ freeTimerEntry(UA_TimerEntry *te, void *data) {
 }
 
 /* Process and then free registered delayed callbacks */
-static void
+static
+void
 processDelayed(UA_EventLoop *el) {
     UA_LOCK_ASSERT(&el->elMutex, 1);
     while(el->delayedCallbacks) {
@@ -300,6 +353,13 @@ processDelayed(UA_EventLoop *el) {
     }
 }
 
+void
+UA_EventLoop_processDelayed(UA_EventLoop *el) {
+    UA_LOCK(&el->elMutex);
+    processDelayed(el);
+    UA_UNLOCK(&el->elMutex);
+}
+
 /***********************/
 /* EventLoop Lifecycle */
 /***********************/
@@ -310,7 +370,7 @@ UA_EventLoop_new(const UA_Logger *logger) {
     if(!el)
         return NULL;
     memset(el, 0, sizeof(UA_EventLoop));
-    UA_LOCK_INIT(&t->elMutex);
+    UA_LOCK_INIT(&el->elMutex);
     el->logger = logger;
     return el;
 }
@@ -331,7 +391,9 @@ UA_EventLoop_delete(UA_EventLoop *el) {
     /* Deregister and delete all the EventSources */
     while(el->eventSources) {
         UA_EventSource *es = el->eventSources;
+        UA_UNLOCK(&el->elMutex);
         UA_EventLoop_deregisterEventSource(el, es);
+        UA_LOCK(&el->elMutex);
         es->free(es);
     }
 
@@ -340,6 +402,9 @@ UA_EventLoop_delete(UA_EventLoop *el) {
 
     /* Process remaining delayed callbacks */
     processDelayed(el);
+
+    /* free the file descriptors */
+    UA_free(el->fds);
 
     /* Clean up */
     UA_UNLOCK(&el->elMutex);
@@ -367,7 +432,9 @@ UA_EventLoop_start(UA_EventLoop *el) {
     UA_EventSource *es = el->eventSources;
     UA_StatusCode res = UA_STATUSCODE_GOOD;
     while(es) {
+        UA_UNLOCK(&el->elMutex);
         res |= es->start(es);
+        UA_LOCK(&el->elMutex);
         es = es->next;
     }
 
@@ -436,31 +503,62 @@ UA_StatusCode
 UA_EventLoop_run(UA_EventLoop *el, UA_UInt32 timeout) {
     UA_LOCK(&el->elMutex);
 
+    if (el->executing) {
+        UA_LOG_ERROR(el->logger,
+                     UA_LOGCATEGORY_EVENTLOOP,
+                     "Cannot run eventloop from the run method itself");
+        UA_UNLOCK(&el->elMutex);
+        return UA_STATUSCODE_BADINTERNALERROR;
+    }
+    /* TODO: use check macros instead
+    UA_CHECK_ERROR(!el->executing, return UA_STATUSCODE_BADINTERNALERROR, el->logger,
+                   UA_LOGCATEGORY_EVENTLOOP,
+                   "Cannot run eventloop from the run method itself");
+    */
+
+    el->executing = true;
+
     if(el->state == UA_EVENTLOOPSTATE_FRESH ||
        el->state == UA_EVENTLOOPSTATE_STOPPED) {
         UA_LOG_WARNING(el->logger, UA_LOGCATEGORY_EVENTLOOP,
                        "Cannot iterate a stopped EventLoop");
+        el->executing = false;
+        UA_UNLOCK(&el->elMutex);
         return UA_STATUSCODE_BADINTERNALERROR;
     }
 
     /* Process cyclic callbacks */
-    processTimer(el, UA_DateTime_nowMonotonic());
+    UA_DateTime dateBeforeCallback = UA_DateTime_nowMonotonic();
+    UA_DateTime dateOfNextCallback = processTimer(el, dateBeforeCallback);
+    UA_DateTime dateAfterCallback = UA_DateTime_nowMonotonic();
+
+    UA_DateTime processTimerDuration = dateAfterCallback - dateBeforeCallback;
+
+    UA_DateTime callbackTimeout = dateOfNextCallback - dateAfterCallback;
+    UA_DateTime maxTimeout = UA_MAX(timeout * UA_DATETIME_MSEC - processTimerDuration, 0);
+
+    UA_DateTime usedTimeout = UA_MIN(callbackTimeout, maxTimeout);
 
     /* Listen on the active file-descriptors (sockets) from the
      * ConnectionManagers */
     fd_set readset, writeset, errset;
     UA_FD highestfd = setFDSets(el, &readset, &writeset, &errset);
-    struct timeval tmptv = {0, timeout * 1000};
-    if(select(highestfd+1, &readset, &writeset, &errset, &tmptv) < 0) {
+
+    struct timeval tmptv = {usedTimeout / UA_DATETIME_SEC,
+                            (usedTimeout % UA_DATETIME_SEC) / UA_DATETIME_USEC };
+    int selectStatus =  select(highestfd+1, &readset, &writeset, &errset, &tmptv);
+    if(selectStatus < 0) {
         /* We will retry, only log the error */
         UA_LOG_SOCKET_ERRNO_WRAP(
            UA_LOG_WARNING(UA_EventLoop_getLogger(el),
                           UA_LOGCATEGORY_EVENTLOOP,
                           "Error during select: %s", errno_str));
+        el->executing = false;
+        UA_UNLOCK(&el->elMutex);
         return UA_STATUSCODE_GOOD;
     }
 
-    /* Loop over all registered FD to see if an event arrived. Yes, this is why
+   /* Loop over all registered FD to see if an event arrived. Yes, this is why
      * select is slow for many open sockets. */
     for(size_t i = 0; i < el->fdsSize; i++) {
         UA_RegisteredFD *rfd = &el->fds[i];
@@ -501,9 +599,15 @@ UA_EventLoop_run(UA_EventLoop *el, UA_UInt32 timeout) {
     processDelayed(el);
 
     /* Check if the last EventSource was successfully stopped */
-    if(el->state == UA_EVENTLOOPSTATE_STOPPING)
+    if(el->state == UA_EVENTLOOPSTATE_STOPPING) {
         checkClosed(el);
+    }
 
+    el->executing = false;
+    if (selectStatus == 0) {
+        UA_UNLOCK(&el->elMutex);
+        return UA_STATUSCODE_GOODNONCRITICALTIMEOUT;
+    }
     UA_UNLOCK(&el->elMutex);
     return UA_STATUSCODE_GOOD;
 }
@@ -574,6 +678,8 @@ UA_StatusCode
 UA_EventLoop_registerFD(UA_EventLoop *el, UA_FD fd, short eventMask,
                         UA_FDCallback cb, UA_EventSource *es, void *fdcontext) {
     UA_LOCK(&el->elMutex);
+
+    UA_LOG_DEBUG(el->logger, UA_LOGCATEGORY_EVENTLOOP, "registering fd: %d", fd);
     /* Realloc */
     UA_RegisteredFD *fds_tmp = (UA_RegisteredFD*)
         UA_realloc(el->fds, sizeof(UA_RegisteredFD) * (el->fdsSize + 1));
@@ -626,6 +732,7 @@ UA_StatusCode
 UA_EventLoop_deregisterFD(UA_EventLoop *el, UA_FD fd) {
     UA_LOCK(&el->elMutex);
 
+    UA_LOG_DEBUG(el->logger, UA_LOGCATEGORY_EVENTLOOP, "unregistering fd: %d", fd);
     /* Find the entry */
     size_t i = 0;
     for(; i < el->fdsSize; i++) {
@@ -645,7 +752,9 @@ UA_EventLoop_deregisterFD(UA_EventLoop *el, UA_FD fd) {
         el->fds[i] = el->fds[el->fdsSize];
         UA_RegisteredFD *fds_tmp = (UA_RegisteredFD*)
             UA_realloc(el->fds, sizeof(UA_RegisteredFD) * el->fdsSize);
-        if(fds_tmp)
+        /* if realloc fails the fds are still in a correct state with 
+         * possibly lost memory, so failing silently here is ok */
+        if (fds_tmp)
             el->fds = fds_tmp;
     } else {
         /* Remove the last entry */
