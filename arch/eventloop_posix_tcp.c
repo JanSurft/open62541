@@ -436,9 +436,10 @@ TCP_openConnection(UA_ConnectionManager *cm, const UA_String connectString,
     UA_FD newSock = socket(info->ai_family, info->ai_socktype, info->ai_protocol);
     if(newSock == UA_INVALID_SOCKET) {
         freeaddrinfo(info);
-        UA_LOG_WARNING(UA_EventLoop_getLogger(cm->eventSource.eventLoop),
-                       UA_LOGCATEGORY_NETWORK,
-                       "Could not create client socket: %s", strerror(UA_ERRNO));
+        UA_LOG_SOCKET_ERRNO_WRAP(
+            UA_LOG_WARNING(UA_EventLoop_getLogger(cm->eventSource.eventLoop),
+                           UA_LOGCATEGORY_NETWORK,
+                           "Could not create client socket: %s", errno_str));
         return UA_STATUSCODE_BADDISCONNECT;
     }
 
@@ -456,9 +457,10 @@ TCP_openConnection(UA_ConnectionManager *cm, const UA_String connectString,
     error = UA_connect(newSock, info->ai_addr, info->ai_addrlen);
     freeaddrinfo(info);
     if(error != 0 && errno != UA_ERR_CONNECTION_PROGRESS) {
-        UA_LOG_ERROR(UA_EventLoop_getLogger(cm->eventSource.eventLoop),
-                     UA_LOGCATEGORY_NETWORK, "Connecting the socket failed: %s",
-                     strerror(UA_ERRNO));
+        UA_LOG_SOCKET_ERRNO_WRAP(
+            UA_LOG_ERROR(UA_EventLoop_getLogger(cm->eventSource.eventLoop),
+                           UA_LOGCATEGORY_NETWORK,
+                           "Connecting the socket failed: %s", errno_str));
         return UA_STATUSCODE_BADDISCONNECT;
     }
 
