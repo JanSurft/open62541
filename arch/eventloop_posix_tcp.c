@@ -456,7 +456,7 @@ TCP_openConnection(UA_ConnectionManager *cm, const UA_String connectString,
     /* Non-blocking connect */
     error = UA_connect(newSock, info->ai_addr, info->ai_addrlen);
     freeaddrinfo(info);
-    if(error != 0 && errno != UA_ERR_CONNECTION_PROGRESS) {
+    if(error != 0 && UA_ERRNO != UA_ERR_CONNECTION_PROGRESS) {
         UA_LOG_SOCKET_ERRNO_WRAP(
             UA_LOG_ERROR(UA_EventLoop_getLogger(cm->eventSource.eventLoop),
                            UA_LOGCATEGORY_NETWORK,
