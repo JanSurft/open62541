@@ -266,9 +266,9 @@ add_executable(check_eventloop check_eventloop.c $<TARGET_OBJECTS:open62541-obje
 target_link_libraries(check_eventloop ${LIBS})
 add_test_valgrind(eventloop ${TESTS_BINARY_DIR}/check_eventloop)
 
-add_executable(check_eventloop_tcp check_eventloop_tcp.c $<TARGET_OBJECTS:open62541-object> $<TARGET_OBJECTS:open62541-testplugins>)
-target_link_libraries(check_eventloop_tcp ${LIBS})
-add_test_valgrind(eventloop_tcp ${TESTS_BINARY_DIR}/check_eventloop_tcp)
+# add_executable(check_eventloop_tcp check_eventloop_tcp.c $<TARGET_OBJECTS:open62541-object> $<TARGET_OBJECTS:open62541-testplugins>)
+# target_link_libraries(check_eventloop_tcp ${LIBS})
+# add_test_valgrind(eventloop_tcp ${TESTS_BINARY_DIR}/check_eventloop_tcp)
 
 # Test Server
 
