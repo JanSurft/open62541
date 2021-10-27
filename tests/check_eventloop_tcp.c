@@ -27,11 +27,12 @@ START_TEST(listenTCP) {
     cm->connectionCallback = noopCallback;
     UA_ConfigParameter_setParameter(&cm->eventSource.parameters, "listen-port", &portVar);
     UA_EventLoop_registerEventSource(el, &cm->eventSource);
+
+    UA_EventLoop_start(el);
     /* Open a client connection */
     UA_StatusCode retval = cm->openConnection(cm, UA_STRING("localhost:4840"), (void*)0x01);
     ck_assert_uint_eq(retval, UA_STATUSCODE_GOOD);
 
-    UA_EventLoop_start(el);
 
     for(size_t i = 0; i < 10; i++) {
         UA_DateTime next = UA_EventLoop_run(el, 1);
