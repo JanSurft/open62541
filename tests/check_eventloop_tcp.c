@@ -13,6 +13,10 @@
 
 UA_EventLoop *el;
 
+static void noopCallback(UA_ConnectionManager *cm, uintptr_t connectionId,
+                   void **connectionContext, UA_StatusCode status,
+                   UA_ByteString msg) {}
+
 START_TEST(listenTCP) {
     el = UA_EventLoop_new(UA_Log_Stdout);
 
@@ -20,8 +24,12 @@ START_TEST(listenTCP) {
     UA_Variant portVar;
     UA_Variant_setScalar(&portVar, &port, &UA_TYPES[UA_TYPES_UINT16]);
     UA_ConnectionManager *cm = UA_ConnectionManager_TCP_new(UA_STRING("tcpCM"));
+    cm->connectionCallback = noopCallback;
     UA_ConfigParameter_setParameter(&cm->eventSource.parameters, "listen-port", &portVar);
     UA_EventLoop_registerEventSource(el, &cm->eventSource);
+    /* Open a client connection */
+    UA_StatusCode retval = cm->openConnection(cm, UA_STRING("localhost:4840"), (void*)0x01);
+    ck_assert_uint_eq(retval, UA_STATUSCODE_GOOD);
 
     UA_EventLoop_start(el);
 
