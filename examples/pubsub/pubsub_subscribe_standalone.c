@@ -141,7 +141,7 @@ int main(int argc, char **argv) {
     psc->regist(psc, NULL, NULL);
 
     UA_StatusCode retval = UA_STATUSCODE_GOOD;
-    while(running && retval == UA_STATUSCODE_GOOD)
+    while(running && (retval == UA_STATUSCODE_GOOD || retval == UA_STATUSCODE_GOODNONCRITICALTIMEOUT))
         retval = subscriberListen(psc);
 
     psc->close(psc);
