@@ -369,8 +369,7 @@ UDP_registerListenSocketDomainName(UA_ConnectionManager *cm, const char *hostnam
     UA_freeaddrinfo(res);
     return UA_STATUSCODE_GOOD;
 }
-
-#ifdef WIN32
+#ifdef _WIN32
 static
 UA_RegisteredFD *
 findRegisteredFD(UDPConnectionManager *cm, uintptr_t connectionId) {
@@ -383,6 +382,19 @@ findRegisteredFD(UDPConnectionManager *cm, uintptr_t connectionId) {
     }
     return NULL;
 }
+
+static
+UA_DelayedCallback *createExplicitlyDelayedShutdownCallback(UA_ConnectionManager *cm, UA_RegisteredFD *rfd, UA_Callback callback) {
+    UA_DelayedCallback *explicitlyDelayedShutdownCallback = (UA_DelayedCallback*) UA_malloc(sizeof(UA_DelayedCallback));
+    if (explicitlyDelayedShutdownCallback == NULL) {
+        return NULL;
+    }
+    explicitlyDelayedShutdownCallback->callback = callback;
+    explicitlyDelayedShutdownCallback->application = cm;
+    explicitlyDelayedShutdownCallback->data = rfd;
+    return explicitlyDelayedShutdownCallback;
+}
+
 static
 void delayedShutdownCallback(void* application, void* data) {
 
@@ -391,18 +403,27 @@ void delayedShutdownCallback(void* application, void* data) {
     UA_RegisteredFD* rfd = (UA_RegisteredFD *) data;
 
     UA_ByteString response = ucm->rxBuffer;
-    int ret = UA_recv(rfd->fd, (char *)response.data, response.length, MSG_DONTWAIT);
+    int ret = UA_recv(rfd->fd, (char *)response.data, response.length, MSG_DONTWAIT | MSG_PEEK);
     if(ret == 0 || ret == -1) {
         cm->connectionCallback(cm, (uintptr_t)rfd->fd, &rfd->context,
                                UA_STATUSCODE_BADCONNECTIONCLOSED,
                                0, NULL, UA_BYTESTRING_NULL);
         UDP_close(ucm, rfd);
     } else {
-        UA_LOG_SOCKET_ERRNO_WRAP(
-            UA_LOG_ERROR(cm->eventSource.eventLoop->logger,
-                         UA_LOGCATEGORY_NETWORK,
-                         "UDP %u\t| Error shutting down the socket , windows implementation for processing pending data is not implemented (%s)",
-                         (unsigned)rfd->fd, errno_str));
+
+        /* add the delayed shutdown callback again because the peeked data will be processed in the next el cycle */
+        UA_DelayedCallback *explicitlyDelayedShutdownCallback = createExplicitlyDelayedShutdownCallback(cm, rfd, delayedShutdownCallback);
+        if (explicitlyDelayedShutdownCallback == NULL) {
+            UA_LOG_SOCKET_ERRNO_WRAP(
+                UA_LOG_ERROR(cm->eventSource.eventLoop->logger,
+                             UA_LOGCATEGORY_NETWORK,
+                             "UDP %u\t| Error Out of memory for creating delayed shutdown callback (%s)",
+                             (unsigned)rfd->fd, errno_str));
+            return;
+        }
+
+        UA_EventLoop *el = cm->eventSource.eventLoop;
+        el->addDelayedCallback(el, explicitlyDelayedShutdownCallback);
         return;
     }
 }
@@ -424,12 +445,12 @@ UDP_shutdownConnection(UA_ConnectionManager *cm, uintptr_t connectionId) {
     int res = UA_shutdown((UA_FD)connectionId, SD_SEND);
     UDPConnectionManager *ucm = (UDPConnectionManager*)cm;
     UA_RegisteredFD* rfd = findRegisteredFD(ucm, (UA_FD) connectionId);
-    UA_EventLoop *el = cm->eventSource.eventLoop;
+    UA_DelayedCallback *explicitlyDelayedShutdownCallback = createExplicitlyDelayedShutdownCallback(cm, rfd, delayedShutdownCallback);
+    if (explicitlyDelayedShutdownCallback == NULL) {
+        return UA_STATUSCODE_BADOUTOFMEMORY;
+    }
 
-    UA_DelayedCallback *explicitlyDelayedShutdownCallback = UA_malloc(sizeof(UA_DelayedCallback));
-    explicitlyDelayedShutdownCallback->callback = delayedShutdownCallback;
-    explicitlyDelayedShutdownCallback->application = cm;
-    explicitlyDelayedShutdownCallback->data = rfd;
+    UA_EventLoop *el = cm->eventSource.eventLoop;
     el->addDelayedCallback(el, explicitlyDelayedShutdownCallback);
 #endif
     if(res != 0) {
