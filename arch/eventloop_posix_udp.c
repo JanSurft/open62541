@@ -30,6 +30,8 @@
 /* A registered file descriptor with an additional method pointer */
 typedef struct {
     UA_RegisteredFD fd;
+    struct sockaddr* addr;
+    socklen_t addrLength;
     UA_ConnectionManager_connectionCallback connectionCallback;
 } UDP_FD;
 
@@ -74,6 +76,15 @@ UDP_setNoSigPipe(UA_FD sockfd) {
     if(res < 0)
         return UA_STATUSCODE_BADINTERNALERROR;
 #endif
+    return UA_STATUSCODE_GOOD;
+}
+
+static UA_StatusCode
+UA_freeUDPfd(UDP_FD *ufd) {
+    if (ufd->addr) {
+        UA_free(ufd->addr);
+    }
+    UA_free(ufd);
     return UA_STATUSCODE_GOOD;
 }
 
@@ -540,6 +551,10 @@ UDPConnectionManager_register(UDPConnectionManager *ucm, UA_RegisteredFD *rfd) {
 
 static void
 UDPConnectionManager_deregister(UDPConnectionManager *ucm, UA_RegisteredFD *rfd) {
+    UDP_FD* ufd = (UDP_FD*) rfd;
+    if (ufd->addr) {
+        UA_free(ufd->addr);
+    }
     UA_EventLoopPOSIX *el = (UA_EventLoopPOSIX*)ucm->cm.eventSource.eventLoop;
     UA_EventLoopPOSIX_deregisterFD(el, rfd);
     LIST_REMOVE(rfd, es_pointers);
@@ -679,7 +694,7 @@ UDP_connectionSocketCallback(UA_ConnectionManager *cm, UA_RegisteredFD *rfd,
                         "UDP %u\t| recv signaled the socket was shutdown (%s)",
                         (unsigned)rfd->fd, errno_str));
         UDP_close(ucm, rfd);
-        UA_free(rfd);
+        UA_freeUDPfd((UDP_FD*)rfd);
         return;
     }
 
@@ -843,7 +858,7 @@ UDP_registerListenSocket(UA_ConnectionManager *cm, UA_UInt16 port, struct addrin
         UA_LOG_WARNING(el->eventLoop.logger, UA_LOGCATEGORY_NETWORK,
                        "UDP %u\t| Error registering the socket, closing",
                        (unsigned)listenSocket);
-        UA_free(newudpfd);
+        UA_freeUDPfd(newudpfd);
         UA_close(listenSocket);
         return;
     }
@@ -964,6 +979,7 @@ UDP_sendWithConnection(UA_ConnectionManager *cm, uintptr_t connectionId,
     /* Send the full buffer. This may require several calls to send */
     size_t nWritten = 0;
 
+    UDP_FD *ufd = (UDP_FD *) UDP_findRegisteredFD((UDPConnectionManager *)cm, connectionId);
     do {
         ssize_t n = 0;
         do {
@@ -971,9 +987,9 @@ UDP_sendWithConnection(UA_ConnectionManager *cm, uintptr_t connectionId,
                          UA_LOGCATEGORY_NETWORK,
                          "UDP %u\t| Attempting to send", (unsigned)connectionId);
             size_t bytes_to_send = buf->length - nWritten;
-            n = UA_send((UA_FD)connectionId,
+            n = UA_sendto((UA_FD)connectionId,
                         (const char*)buf->data + nWritten,
-                        bytes_to_send, flags);
+                        bytes_to_send, flags, ufd->addr, ufd->addrLength);
             if(n < 0) {
                 /* An error we cannot recover from? */
                 if(UA_ERRNO != UA_INTERRUPTED &&
@@ -1050,7 +1066,7 @@ checkForSendMulticastAndConfigure(size_t paramsSize, const UA_KeyValuePair *para
 static UA_StatusCode
 registerSocketAndDestinationForSend(size_t paramsSize, const UA_KeyValuePair *params,
                                     const char *hostname, struct addrinfo *info,
-                                    int error, UA_FD *sock, const UA_Logger *logger) {
+                                    int error, UDP_FD * ufd, UA_FD *sock, const UA_Logger *logger) {
     UA_FD newSock = socket(info->ai_family, info->ai_socktype, info->ai_protocol);
     *sock = newSock;
     if(newSock == UA_INVALID_FD) {
@@ -1074,20 +1090,24 @@ registerSocketAndDestinationForSend(size_t paramsSize, const UA_KeyValuePair *pa
                      "UDP\t| Configuring send multicast failed");
         return UA_STATUSCODE_BADINTERNALERROR;
     }
+    ufd->addr = (struct sockaddr*) UA_malloc(sizeof(struct sockaddr));
+    memcpy(ufd->addr, info->ai_addr, sizeof(struct sockaddr));
+    ufd->addrLength = info->ai_addrlen;
     /* Non-blocking connect */
-    error = UA_connect(newSock, info->ai_addr, info->ai_addrlen);
-    if(error != 0 &&
-       UA_ERRNO != UA_INPROGRESS &&
-       UA_ERRNO != UA_WOULDBLOCK) {
-        UA_LOG_SOCKET_ERRNO_WRAP(
-            UA_LOG_WARNING(logger, UA_LOGCATEGORY_NETWORK,
-                           "UDP\t| Connecting the socket to %s failed (%s)",
-                           hostname, errno_str));
-        UA_close(newSock);
-        return UA_STATUSCODE_BADDISCONNECT;
-    }
+    // error = UA_connect(newSock, info->ai_addr, info->ai_addrlen);
+    // if(error != 0 &&
+    //    UA_ERRNO != UA_INPROGRESS &&
+    //    UA_ERRNO != UA_WOULDBLOCK) {
+    //     UA_LOG_SOCKET_ERRNO_WRAP(
+    //         UA_LOG_WARNING(logger, UA_LOGCATEGORY_NETWORK,
+    //                        "UDP\t| Connecting the socket to %s failed (%s)",
+    //                        hostname, errno_str));
+    //     UA_close(newSock);
+    //     return UA_STATUSCODE_BADDISCONNECT;
+    // }
     return res;
 }
+
 
 static UA_StatusCode
 UDP_openSendConnection(UA_ConnectionManager *cm,
@@ -1113,24 +1133,23 @@ UDP_openSendConnection(UA_ConnectionManager *cm,
     }
     UA_LOG_DEBUG(el->eventLoop.logger, UA_LOGCATEGORY_NETWORK,
                  "UDP\t| Open a connection to \"%s\" on port %s", hostname, portStr);
-    /* Create a socket and register the destination address from the provided parameters */
-    UA_FD newSock = UA_INVALID_FD;
-    UA_StatusCode res =
-        registerSocketAndDestinationForSend(paramsSize, params, hostname, info,
-                                            error, &newSock, el->eventLoop.logger);
-    UA_freeaddrinfo(info);
-    if(res != UA_STATUSCODE_GOOD)
-        return res;
 
     /* Allocate the UA_RegisteredFD */
     UDP_FD *newudpfd = (UDP_FD*)UA_calloc(1, sizeof(UDP_FD));
     if(!newudpfd) {
         UA_LOG_WARNING(el->eventLoop.logger, UA_LOGCATEGORY_NETWORK,
-                       "UDP %u\t| Error allocating memory for the socket, closing",
-                       (unsigned)newSock);
-        UA_close(newSock);
+                       "UDP\t| Error allocating memory for the socket, closing");
         return UA_STATUSCODE_BADOUTOFMEMORY;
     }
+
+    /* Create a socket and register the destination address from the provided parameters */
+    UA_FD newSock = UA_INVALID_FD;
+    UA_StatusCode res =
+        registerSocketAndDestinationForSend(paramsSize, params, hostname, info,
+                                            error, newudpfd, &newSock, el->eventLoop.logger);
+    UA_freeaddrinfo(info);
+    if(res != UA_STATUSCODE_GOOD)
+        return res;
 
     newudpfd->fd.fd = newSock;
     newudpfd->fd.es = &cm->eventSource;
@@ -1148,7 +1167,7 @@ UDP_openSendConnection(UA_ConnectionManager *cm,
         UA_LOG_WARNING(el->eventLoop.logger, UA_LOGCATEGORY_NETWORK,
                        "UDP\t| Registering the socket for %s failed", hostname);
         UA_close(newSock);
-        UA_free(newudpfd);
+        UA_freeUDPfd(newudpfd);
         return res;
     }
 
